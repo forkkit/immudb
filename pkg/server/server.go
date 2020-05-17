@@ -20,24 +20,30 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"fmt"
 	"io/ioutil"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
+
+	"github.com/rs/xid"
 
 	"github.com/codenotary/immudb/pkg/api/schema"
 	"github.com/codenotary/immudb/pkg/auth"
 	"github.com/codenotary/immudb/pkg/store"
 	"github.com/dgraph-io/badger/v2/pb"
 	"github.com/golang/protobuf/ptypes/empty"
+	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
+
+var startedAt time.Time
 
 func (s *ImmuServer) Start() error {
 	options := []grpc.ServerOption{}
@@ -75,31 +81,67 @@ func (s *ImmuServer) Start() error {
 		options = []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsConfig))}
 	}
 
-	if s.Options.Auth {
-		if err := s.loadOrGeneratePassword(); err != nil {
-			return err
-		}
-		options = append(
-			options,
-			grpc.UnaryInterceptor(auth.ServerUnaryInterceptor),
-			grpc.StreamInterceptor(auth.ServerStreamInterceptor),
-		)
-	}
-
 	listener, err := net.Listen(s.Options.Network, s.Options.Bind())
 	if err != nil {
+		s.Logger.Errorf("Immudb unable to listen: %s", err)
+		return err
+	}
+	sysDbDir := filepath.Join(s.Options.Dir, s.Options.SysDbName)
+	if err = os.MkdirAll(sysDbDir, os.ModePerm); err != nil {
+		s.Logger.Errorf("Unable to create sys data folder: %s", err)
 		return err
 	}
 	dbDir := filepath.Join(s.Options.Dir, s.Options.DbName)
 	if err = os.MkdirAll(dbDir, os.ModePerm); err != nil {
+		s.Logger.Errorf("Unable to create data folder: %s", err)
+		return err
+	}
+	var uuid xid.ID
+	if uuid, err = getOrSetUuid(s.Options.Dir); err != nil {
+		return err
+	}
+
+	auth.AuthEnabled = s.Options.Auth
+	auth.UpdateMetrics = func(ctx context.Context) { Metrics.UpdateClientMetrics(ctx) }
+
+	uuidContext := NewUuidContext(uuid)
+
+	uis := []grpc.UnaryServerInterceptor{
+		uuidContext.UuidContextSetter,
+		grpc_prometheus.UnaryServerInterceptor,
+		auth.ServerUnaryInterceptor,
+	}
+	sss := []grpc.StreamServerInterceptor{
+		uuidContext.UuidStreamContextSetter,
+		grpc_prometheus.StreamServerInterceptor,
+		auth.ServerStreamInterceptor,
+	}
+	options = append(
+		options,
+		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(uis...)),
+		grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(sss...)),
+	)
+
+	s.SysStore, err = store.Open(store.DefaultOptions(sysDbDir, s.Logger))
+	if err != nil {
+		s.Logger.Errorf("Unable to open sysstore: %s", err)
 		return err
 	}
 	s.Store, err = store.Open(store.DefaultOptions(dbDir, s.Logger))
 	if err != nil {
+		s.Logger.Errorf("Unable to open store: %s", err)
 		return err
 	}
 
-	metricsServer := StartMetrics(s.Options.MetricsBind(), s.Logger)
+	auth.AdminUserExists = s.adminUserExists
+	auth.CreateAdminUser = s.createAdminUser
+
+	metricsServer := StartMetrics(
+		s.Options.MetricsBind(),
+		s.Logger,
+		func() float64 { return float64(s.Store.CountAll()) },
+		func() float64 { return time.Since(startedAt).Hours() },
+	)
 	defer func() {
 		if err = metricsServer.Close(); err != nil {
 			s.Logger.Errorf("failed to shutdown metric server: %s", err)
@@ -108,6 +150,18 @@ func (s *ImmuServer) Start() error {
 
 	s.GrpcServer = grpc.NewServer(options...)
 	schema.RegisterImmuServiceServer(s.GrpcServer, s)
+	//===> !NOTE: See Histograms section here:
+	// https://github.com/grpc-ecosystem/go-grpc-prometheus
+	// TL;DR:
+	// Prometheus histograms are a great way to measure latency distributions of
+	// your RPCs. However, since it is bad practice to have metrics of high
+	// cardinality the latency monitoring metrics are disabled by default. To
+	// enable them the following has to be called during initialization code:
+	if !s.Options.NoHistograms {
+		grpc_prometheus.EnableHandlingTimeHistogram()
+	}
+	//<===
+	grpc_prometheus.Register(s.GrpcServer)
 	s.installShutdownHandler()
 	s.Logger.Infof("starting immudb: %v", s.Options)
 
@@ -118,9 +172,12 @@ func (s *ImmuServer) Start() error {
 
 	if s.Options.Pidfile != "" {
 		if s.Pid, err = NewPid(s.Options.Pidfile); err != nil {
+			s.Logger.Errorf("failed to write pidfile: %s", err)
 			return err
 		}
 	}
+
+	startedAt = time.Now()
 
 	err = s.GrpcServer.Serve(listener)
 	<-s.quit
@@ -132,26 +189,41 @@ func (s *ImmuServer) Stop() error {
 	defer func() { s.quit <- struct{}{} }()
 	s.GrpcServer.Stop()
 	s.GrpcServer = nil
+	if s.SysStore != nil {
+		defer func() { s.SysStore = nil }()
+		s.SysStore.Close()
+	}
 	if s.Store != nil {
-		defer func() { s.Store = nil }()
+		defer func() {
+			s.Store = nil
+		}()
 		return s.Store.Close()
 	}
 	return nil
 }
 
 func (s *ImmuServer) Login(ctx context.Context, r *schema.LoginRequest) (*schema.LoginResponse, error) {
-	if !s.Options.Auth {
+	if !s.Options.Auth && !auth.IsAdminClient(ctx) {
 		return nil, status.Errorf(codes.Unavailable, "authentication is disabled on server")
 	}
-	user := string(r.User)
-	if user != auth.AdminUser.Username {
-		return nil, status.Errorf(codes.Unauthenticated, "non-existent user %s", user)
+	item, err := s.SysStore.Get(schema.Key{Key: r.User})
+	if err != nil {
+		if err == store.ErrKeyNotFound {
+			return nil, status.Errorf(codes.PermissionDenied, "invalid user or password")
+		}
+		s.Logger.Errorf("error getting user %s during login: %v", string(r.User), err)
+		return nil, status.Errorf(codes.Internal, "internal error")
 	}
-	pass := string(r.Password)
-	if err := auth.AdminUser.ComparePasswords(pass); err != nil {
-		return nil, status.Errorf(codes.Unauthenticated, "incorrect password")
+	username := string(item.GetKey())
+	u := auth.User{
+		Username:       username,
+		HashedPassword: item.GetValue(),
+		Admin:          username == auth.AdminUsername,
 	}
-	token, err := auth.GenerateToken(user)
+	if u.ComparePasswords(r.GetPassword()) != nil {
+		return nil, status.Errorf(codes.PermissionDenied, "invalid user or password")
+	}
+	token, err := auth.GenerateToken(u)
 	if err != nil {
 		return nil, err
 	}
@@ -502,34 +574,4 @@ func (s *ImmuServer) installShutdownHandler() {
 		}
 		s.Logger.Infof("shutdown completed")
 	}()
-}
-
-func (s *ImmuServer) loadOrGeneratePassword() error {
-	var filename = "immudb_pwd"
-	if err := auth.GenerateKeys(); err != nil {
-		return fmt.Errorf("error generating or loading access keys (used for auth): %v", err)
-	}
-
-	if _, err := os.Stat(filename); !os.IsNotExist(err) {
-		hashedPassword, err := ioutil.ReadFile(filename)
-		if err != nil {
-			return fmt.Errorf("error reading hashed password from file %s: %v", filename, err)
-		}
-		auth.AdminUser.SetPassword(hashedPassword)
-		s.Logger.Infof("previous hashed password read from file %s\n", filename)
-		return nil
-	}
-
-	plainPassword, err := auth.AdminUser.GenerateAndSetPassword()
-	if err != nil {
-		return fmt.Errorf("error generating password: %v", err)
-	}
-	if err := ioutil.WriteFile(filename, auth.AdminUser.HashedPassword, 0644); err != nil {
-		return fmt.Errorf("error saving generated password hash to file %s: %v", filename, err)
-	}
-
-	s.Logger.Infof("user: %s, password: %s\n", auth.AdminUser.Username, plainPassword)
-	s.Logger.Infof("hashed password saved to file %s\n", filename)
-
-	return nil
 }

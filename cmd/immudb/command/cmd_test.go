@@ -1,4 +1,20 @@
-package main
+/*
+Copyright 2019-2020 vChain, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package immudb
 
 import (
 	"bytes"
@@ -74,12 +90,12 @@ func TestImmudbCommandFlagParserPriority(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "", options.Logfile)
 	// 4-b. config file specified in command line
-	_, err = executeCommand(cmd, "--config=./../../test/immudb.ini")
+	_, err = executeCommand(cmd, "--config=../../../test/immudb.toml")
 	assert.NoError(t, err)
 	assert.Equal(t, "ConfigFileThatsNameIsDeclaredOnTheCommandLine", options.Logfile)
 
 	// 3. env. variables
-	os.Setenv("IMMUDB_DEFAULT.LOGFILE", "EnvironmentVars")
+	os.Setenv("IMMUDB_LOGFILE", "EnvironmentVars")
 	_, err = executeCommand(cmd)
 	assert.NoError(t, err)
 	assert.Equal(t, "EnvironmentVars", options.Logfile)
@@ -90,7 +106,7 @@ func TestImmudbCommandFlagParserPriority(t *testing.T) {
 	assert.Equal(t, o.Logfile, options.Logfile)
 
 	// 1. overrides
-	viper.Set("default.logfile", "override")
+	viper.Set("logfile", "override")
 	_, err = executeCommand(cmd, "--logfile="+o.Logfile)
 	assert.NoError(t, err)
 	assert.Equal(t, "override", options.Logfile)

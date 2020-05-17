@@ -713,6 +713,15 @@
         }
       }
     },
+    "schemaCreateUserResponse": {
+      "type": "object",
+      "properties": {
+        "user": {
+          "type": "string",
+          "format": "byte"
+        }
+      }
+    },
     "schemaHealthResponse": {
       "type": "object",
       "properties": {

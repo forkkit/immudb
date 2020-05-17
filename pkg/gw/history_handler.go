@@ -13,17 +13,17 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
-
 package gw
 
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+
 	"github.com/codenotary/immudb/pkg/client"
 	"github.com/grpc-ecosystem/grpc-gateway/runtime"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"net/http"
 )
 
 type HistoryHandler interface {
@@ -32,15 +32,13 @@ type HistoryHandler interface {
 
 type historyHandler struct {
 	mux    *runtime.ServeMux
-	client *client.ImmuClient
-	rs     client.RootService
+	client client.ImmuClient
 }
 
-func NewHistoryHandler(mux *runtime.ServeMux, client *client.ImmuClient, rs client.RootService) HistoryHandler {
+func NewHistoryHandler(mux *runtime.ServeMux, client client.ImmuClient) HistoryHandler {
 	return &historyHandler{
 		mux,
 		client,
-		rs,
 	}
 }
 
@@ -90,5 +88,4 @@ func (h *historyHandler) History(w http.ResponseWriter, req *http.Request, pathP
 		runtime.HTTPError(ctx, h.mux, outboundMarshaler, w, req, err)
 		return
 	}
-	return
 }

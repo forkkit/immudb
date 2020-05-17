@@ -19,13 +19,17 @@ package auth
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
+	"github.com/codenotary/immudb/pkg/api/schema"
 	"github.com/o1egl/paseto"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/ed25519"
@@ -34,8 +38,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// generates a random ASCII string with at least one digit and one special character
-func generatePassword() string {
+var AuthEnabled bool
+
+// GeneratePassword generates a random ASCII string with at least one digit and one special character
+func GeneratePassword() string {
 	rand.Seed(time.Now().UnixNano())
 	digits := "0123456789"
 	// other special characters: ~=+%^*/()[]{}/!@#$?|
@@ -56,23 +62,15 @@ func generatePassword() string {
 	return string(buf)
 }
 
-// NOTE: bcrypt.MinCost is 4
-const passwordHashCostDefault = 6
-const passwordHashCostHigh = bcrypt.DefaultCost
-
-func hashAndSaltPassword(plainPassword string, highCost bool) ([]byte, error) {
-	hashCost := passwordHashCostDefault
-	if highCost {
-		hashCost = passwordHashCostHigh
-	}
-	hashedPasswordBytes, err := bcrypt.GenerateFromPassword([]byte(plainPassword), hashCost)
+func HashAndSaltPassword(plainPassword string) ([]byte, error) {
+	hashedPasswordBytes, err := bcrypt.GenerateFromPassword([]byte(plainPassword), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, fmt.Errorf("error hashing password: %v", err)
 	}
 	return hashedPasswordBytes, nil
 }
 
-func comparePasswords(hashedPassword []byte, plainPassword []byte) error {
+func ComparePasswords(hashedPassword []byte, plainPassword []byte) error {
 	return bcrypt.CompareHashAndPassword(hashedPassword, plainPassword)
 }
 
@@ -85,7 +83,7 @@ func GenerateKeys() error {
 	var err error
 	publicKey, privateKey, err = ed25519.GenerateKey(nil)
 	if err != nil {
-		return fmt.Errorf("error generating public and private keys: %v", err)
+		return fmt.Errorf("error generating public and private keys (used for signing and verifying tokens): %v", err)
 	}
 	return nil
 }
@@ -144,20 +142,23 @@ func readKeyFromFile(fileName string) ([]byte, error) {
 	return keyBytes, nil
 }
 
-const footer = "CodeNotary"
+const footer = "immudb"
 const tokenValidity = 1 * time.Hour
 
 // GenerateToken ...
-func GenerateToken(username string) (string, error) {
+func GenerateToken(user User) (string, error) {
+	if privateKey == nil || len(privateKey) == 0 {
+		if err := GenerateKeys(); err != nil {
+			return "", err
+		}
+	}
 	now := time.Now()
-
-	token, err := pasetoV2.Sign(
-		privateKey,
-		paseto.JSONToken{
-			Expiration: now.Add(tokenValidity),
-			Subject:    username,
-		},
-		footer)
+	jsonToken := paseto.JSONToken{
+		Expiration: now.Add(tokenValidity),
+		Subject:    user.Username,
+	}
+	jsonToken.Set("admin", strconv.FormatBool(user.Admin))
+	token, err := pasetoV2.Sign(privateKey, jsonToken, footer)
 	if err != nil {
 		return "", fmt.Errorf("error generating token: %v", err)
 	}
@@ -168,10 +169,16 @@ func GenerateToken(username string) (string, error) {
 // JSONToken ...
 type JSONToken struct {
 	Username   string
+	Admin      bool
 	Expiration time.Time
 }
 
 func verifyToken(token string) (*JSONToken, error) {
+	if publicKey == nil || len(publicKey) == 0 {
+		if err := GenerateKeys(); err != nil {
+			return nil, err
+		}
+	}
 	var jsonToken paseto.JSONToken
 	var footer string
 	if err := pasetoV2.Verify(token, publicKey, &jsonToken, &footer); err != nil {
@@ -180,33 +187,182 @@ func verifyToken(token string) (*JSONToken, error) {
 	if err := jsonToken.Validate(); err != nil {
 		return nil, err
 	}
-	return &JSONToken{Username: jsonToken.Subject, Expiration: jsonToken.Expiration}, nil
+	admin, _ := strconv.ParseBool(jsonToken.Get("admin"))
+	return &JSONToken{
+		Username:   jsonToken.Subject,
+		Admin:      admin,
+		Expiration: jsonToken.Expiration,
+	}, nil
 }
 
-func verifyTokenFromCtx(ctx context.Context) error {
+func verifyTokenFromCtx(ctx context.Context) (*JSONToken, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return status.Errorf(codes.Internal, "no headers found on request")
+		return nil, status.Errorf(codes.Internal, "no headers found on request")
 	}
 	authHeader, ok := md["authorization"]
 	if !ok || len(authHeader) < 1 {
-		return status.Errorf(codes.Unauthenticated, "no Authorization header found on request")
+		return nil, status.Errorf(codes.Unauthenticated, "no Authorization header found on request")
 	}
 	token := strings.TrimPrefix(authHeader[0], "Bearer ")
-	_, err := verifyToken(token)
+	jsonToken, err := verifyToken(token)
 	if err != nil {
-		return status.Errorf(codes.Unauthenticated, "invalid token %s", token)
+		return nil, status.Errorf(codes.Unauthenticated, "invalid token %s", token)
+	}
+	return jsonToken, nil
+}
+
+const minPasswordLen = 8
+const maxPasswordLen = 32
+
+var PasswordRequirementsMsg = fmt.Sprintf(
+	"password must have between %d and %d letters, digits and special characters "+
+		"of which at least 1 uppercase letter, 1 digit and 1 special character",
+	minPasswordLen,
+	maxPasswordLen,
+)
+
+func IsStrongPassword(password string) error {
+	err := errors.New(PasswordRequirementsMsg)
+	if len(password) < minPasswordLen || len(password) > maxPasswordLen {
+		return err
+	}
+	var hasUpper bool
+	var hasDigit bool
+	var hasSpecial bool
+	for _, ch := range password {
+		switch {
+		case unicode.IsUpper(ch):
+			hasUpper = true
+		case unicode.IsLower(ch):
+		case unicode.IsDigit(ch):
+			hasDigit = true
+		case unicode.IsPunct(ch) || unicode.IsSymbol(ch):
+			hasSpecial = true
+		default:
+			return err
+		}
+	}
+	if !hasUpper || !hasDigit || !hasSpecial {
+		return err
 	}
 	return nil
 }
 
+const loginMethod = "/immudb.schema.ImmuService/Login"
+
 var methodsWithoutAuth = map[string]bool{
 	"/immudb.schema.ImmuService/CurrentRoot": true,
 	"/immudb.schema.ImmuService/Health":      true,
-	"/immudb.schema.ImmuService/Login":       true,
+	loginMethod:                              true,
 }
 
 func HasAuth(method string) bool {
 	_, noAuth := methodsWithoutAuth[method]
 	return !noAuth
+}
+
+var methodsForAdmin = map[string]bool{
+	"/immudb.schema.ImmuService/CreateUser":     true,
+	"/immudb.schema.ImmuService/ChangePassword": true,
+	"/immudb.schema.ImmuService/DeleteUser":     true,
+}
+
+const ClientIDMetadataKey = "client_id"
+const ClientIDMetadataValueAdmin = "immuadmin"
+
+func isAdmin(method string) bool {
+	_, ok := methodsForAdmin[method]
+	return ok
+}
+func IsAdminClient(ctx context.Context) bool {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return false
+	}
+	clientIDMD := md[ClientIDMetadataKey]
+	return len(clientIDMD) > 0 && clientIDMD[0] == ClientIDMetadataValueAdmin
+}
+
+var AdminUserExists func(ctx context.Context) bool
+var CreateAdminUser func(ctx context.Context) (string, string, error)
+
+type ErrFirstAdminLogin struct {
+	message string
+}
+
+func (e *ErrFirstAdminLogin) Error() string {
+	return e.message
+}
+
+func (e *ErrFirstAdminLogin) With(username string, password string) *ErrFirstAdminLogin {
+	e.message = fmt.Sprintf(
+		"FirstAdminLogin\n---\nusername: %s\npassword: %s\n---\n",
+		username,
+		password,
+	)
+	return e
+}
+
+func (e *ErrFirstAdminLogin) Matches(err error) (string, bool) {
+	errMsg := err.Error()
+	grpcErrPieces := strings.Split(errMsg, "desc =")
+	if len(grpcErrPieces) > 1 {
+		errMsg = strings.TrimSpace(strings.Join(grpcErrPieces[1:], ""))
+	}
+	return strings.TrimPrefix(errMsg, "FirstAdminLogin"),
+		strings.Index(errMsg, "FirstAdminLogin") == 0
+}
+
+func createAdminUserAndMsg(ctx context.Context) (*ErrFirstAdminLogin, error) {
+	username, plainPassword, err := CreateAdminUser(ctx)
+	if err == nil {
+		return (&ErrFirstAdminLogin{}).With(username, plainPassword), nil
+	}
+	return nil, err
+}
+
+func checkAuth(ctx context.Context, method string, req interface{}) error {
+	isAdminCLI := IsAdminClient(ctx)
+	if isAdminCLI && !AuthEnabled {
+		if !isLocalClient(ctx) {
+			return status.Errorf(
+				codes.PermissionDenied,
+				"server has authentication disabled: only local connections are accepted")
+		}
+	}
+	isAuthEnabled := AuthEnabled || isAdminCLI
+	if method == loginMethod && isAuthEnabled && isAdminCLI {
+		lReq, ok := req.(*schema.LoginRequest)
+		// if it's the very first admin login attempt, generate admin user and password
+		if ok && string(lReq.GetUser()) == AdminUsername &&
+			len(lReq.GetPassword()) == 0 && !AdminUserExists(ctx) {
+			firstAdminCallMsg, err2 := createAdminUserAndMsg(ctx)
+			if err2 != nil {
+				return err2
+			}
+			return firstAdminCallMsg
+		}
+		// do not allow users other than admin to login from immuadmin CLI
+		if string(lReq.GetUser()) != AdminUsername {
+			return status.Errorf(codes.PermissionDenied, "permission denied")
+		}
+	}
+	if isAuthEnabled && HasAuth(method) {
+		jsonToken, err := verifyTokenFromCtx(ctx)
+		if err != nil {
+			return err
+		}
+		if isAdmin(method) || isAdminCLI {
+			if !jsonToken.Admin {
+				return status.Errorf(codes.PermissionDenied, "permission denied")
+			}
+			if !isLocalClient(ctx) {
+				return status.Errorf(
+					codes.PermissionDenied,
+					"server does not accept admin commands from remote clients")
+			}
+		}
+	}
+	return nil
 }

@@ -17,17 +17,19 @@ limitations under the License.
 package gw
 
 import (
-	"fmt"
+	"encoding/json"
 	"strconv"
 
 	"github.com/codenotary/immudb/pkg/client"
 )
 
 type Options struct {
+	Dir           string
 	Address       string
 	Port          int
 	ImmudbAddress string
 	ImmudbPort    int
+	Detached      bool
 	MTLs          bool
 	MTLsOptions   client.MTLsOptions
 	Config        string
@@ -37,15 +39,23 @@ type Options struct {
 
 func DefaultOptions() Options {
 	return Options{
+		Dir:           ".",
 		Address:       "127.0.0.1",
 		Port:          3323,
 		ImmudbAddress: "127.0.0.1",
 		ImmudbPort:    3322,
+		Detached:      false,
 		MTLs:          false,
-		Config:        "configs/immugw.ini",
+		Config:        "configs/immugw.toml",
 		Pidfile:       "",
 		Logfile:       "",
 	}
+}
+
+// WithDir sets dir
+func (o Options) WithDir(dir string) Options {
+	o.Dir = dir
+	return o
 }
 
 // WithAddress sets address
@@ -78,6 +88,12 @@ func (o Options) WithMTLs(MTLs bool) Options {
 	return o
 }
 
+// WithDetached sets immugw to be run in background
+func (o Options) WithDetached(detached bool) Options {
+	o.Detached = detached
+	return o
+}
+
 // WithMTLsOptions sets MTLsOptions
 func (o Options) WithMTLsOptions(MTLsOptions client.MTLsOptions) Options {
 	o.MTLsOptions = MTLsOptions
@@ -107,7 +123,9 @@ func (o Options) Bind() string {
 }
 
 func (o Options) String() string {
-	return fmt.Sprintf(
-		"{address:%v port:%d immudb-address:%v immudb-port:%d config file:%v pid:%v log:%v MTLs:%v}",
-		o.Address, o.Port, o.ImmudbAddress, o.ImmudbPort, o.Config, o.Pidfile, o.Logfile, o.MTLs)
+	optionsJson, err := json.Marshal(o)
+	if err != nil {
+		return err.Error()
+	}
+	return string(optionsJson)
 }

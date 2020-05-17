@@ -17,23 +17,29 @@ limitations under the License.
 package cache
 
 import (
+	"github.com/spf13/viper"
+	"io/ioutil"
+	"path/filepath"
+
 	"github.com/codenotary/immudb/pkg/api/schema"
 	"github.com/golang/protobuf/proto"
-	"io/ioutil"
 )
 
-const ROOT_FN = ".root"
+const ROOT_FN = ".root-"
 
 type fileCache struct {
+	Dir string
 }
 
-func NewFileCache() Cache {
-	return &fileCache{}
+func NewFileCache(dir string) Cache {
+	return &fileCache{Dir: dir}
 }
 
-func (w *fileCache) Get() (*schema.Root, error) {
+func (w *fileCache) Get(serverUuid string) (*schema.Root, error) {
+	fn := filepath.Join(w.Dir, string(getRootFileName([]byte(ROOT_FN), []byte(serverUuid))))
+
 	root := new(schema.Root)
-	buf, err := ioutil.ReadFile(ROOT_FN)
+	buf, err := ioutil.ReadFile(fn)
 	if err == nil {
 		if err = proto.Unmarshal(buf, root); err != nil {
 			return nil, err
@@ -43,14 +49,25 @@ func (w *fileCache) Get() (*schema.Root, error) {
 	return nil, err
 }
 
-func (w *fileCache) Set(root *schema.Root) error {
+func (w *fileCache) Set(root *schema.Root, serverUuid string) error {
+	fn := filepath.Join(viper.GetString("dir"), string(getRootFileName([]byte(ROOT_FN), []byte(serverUuid))))
+
 	raw, err := proto.Marshal(root)
 	if err != nil {
 		return err
 	}
-	err = ioutil.WriteFile(ROOT_FN, raw, 0644)
+	err = ioutil.WriteFile(fn, raw, 0644)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func getRootFileName(prefix []byte, serverUuid []byte) []byte {
+	l1 := len(prefix)
+	l2 := len(serverUuid)
+	var fn = make([]byte, l1+l2)
+	copy(fn[:], ROOT_FN)
+	copy(fn[l1:], serverUuid)
+	return fn
 }
