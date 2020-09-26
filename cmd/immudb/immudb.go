@@ -16,19 +16,8 @@ limitations under the License.
 
 package main
 
-import (
-	c "github.com/codenotary/immudb/cmd/helper"
-	immudb "github.com/codenotary/immudb/cmd/immudb/command"
-	"github.com/codenotary/immudb/cmd/version"
-	"os"
-)
+import immudb "github.com/codenotary/immudb/cmd/immudb/command"
 
 func main() {
-	version.App = "immudb"
-	cmd := immudb.NewCmd()
-	if err := cmd.Execute(); err != nil {
-		c.QuitWithUserError(err)
-		os.Exit(1)
-	}
-	os.Exit(0)
+	immudb.Execute()
 }

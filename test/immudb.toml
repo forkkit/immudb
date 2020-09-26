@@ -1,6 +1,6 @@
 dir = "."
 network = "tcp"
-address = "127.0.0.1"
+address = "0.0.0.0"
 port = 3322
 dbname = "immudb"
 pidfile = ""
@@ -9,3 +9,5 @@ mtls = false
 pkey = "./tools/mtls/3_application/private/localhost.key.pem"
 certificate = "./tools/mtls/3_application/certs/localhost.cert.pem"
 clientcas = "./tools/mtls/2_intermediate/certs/ca-chain.cert.pem"
+
+auth = false

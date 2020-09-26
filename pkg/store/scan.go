@@ -23,12 +23,13 @@ import (
 	"github.com/dgraph-io/badger/v2"
 )
 
+// Scan fetch the entries having the specified key prefix
 func (t *Store) Scan(options schema.ScanOptions) (list *schema.ItemList, err error) {
-	if len(options.Prefix) > 0 && options.Prefix[0] == tsPrefix {
+	if isReservedKey(options.Prefix) {
 		err = ErrInvalidKeyPrefix
 		return
 	}
-	if len(options.Offset) > 0 && options.Offset[0] == tsPrefix {
+	if isReservedKey(options.Offset) {
 		err = ErrInvalidOffset
 		return
 	}
@@ -71,7 +72,7 @@ func (t *Store) Scan(options schema.ScanOptions) (list *schema.ItemList, err err
 			}
 			var refKey []byte
 			err = it.Item().Value(func(val []byte) error {
-				refKey = append([]byte{}, val...)
+				refKey, _ = unwrapValueWithTS(val)
 				return nil
 			})
 			if err != nil {
@@ -102,8 +103,11 @@ func (t *Store) Scan(options schema.ScanOptions) (list *schema.ItemList, err err
 
 // ZScan The SCAN command is used in order to incrementally iterate over a collection of elements.
 func (t *Store) ZScan(options schema.ZScanOptions) (list *schema.ItemList, err error) {
-
-	if len(options.Offset) > 0 && options.Offset[0] == tsPrefix {
+	if len(options.Set) == 0 || isReservedKey(options.Set) {
+		err = ErrInvalidSet
+		return
+	}
+	if isReservedKey(options.Offset) {
 		err = ErrInvalidOffset
 		return
 	}
@@ -145,7 +149,7 @@ func (t *Store) ZScan(options schema.ZScanOptions) (list *schema.ItemList, err e
 		if it.Item().UserMeta()&bitReferenceEntry == bitReferenceEntry {
 			var refKey []byte
 			err = it.Item().Value(func(val []byte) error {
-				refKey = append([]byte{}, val...)
+				refKey, _ = unwrapValueWithTS(val)
 				return nil
 			})
 			if err != nil {
@@ -174,6 +178,7 @@ func (t *Store) ZScan(options schema.ZScanOptions) (list *schema.ItemList, err e
 	return
 }
 
+// IScan iterates over all entries by the insertion order
 func (t *Store) IScan(options schema.IScanOptions) (list *schema.Page, err error) {
 
 	page := &schema.Page{}

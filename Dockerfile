@@ -14,16 +14,20 @@ ARG IMMU_GID="3322"
 ENV IMMUDB_HOME="/usr/share/immudb" \
     IMMUDB_DIR="/var/lib/immudb" \
     IMMUDB_DBNAME="immudb" \
-    IMMUDB_ADDRESS="127.0.0.1" \
+    IMMUDB_ADDRESS="0.0.0.0" \
     IMMUDB_PORT="3322" \
-    IMMUDB_PIDFILE="/usr/share/immudb/immudb.pid" \
-    IMMUDB_LOGFILE="/usr/share/immudb/immudb.log" \
+    IMMUDB_PIDFILE="" \
+    IMMUDB_LOGFILE="" \
     IMMUDB_MTLS="false" \
-    IMMUDB_AUTH="false" \
+    IMMUDB_AUTH="true" \
     IMMUDB_DETACHED="false" \
     IMMUDB_PKEY="/usr/share/immudb/mtls/3_application/private/key.pem" \
     IMMUDB_CERTIFICATE="/usr/share/immudb/mtls/3_application/certs/server.pem" \
-    IMMUDB_CLIENTCAS="/usr/share/immudb/mtls/2_intermediate/certs/ca-chain.pem"
+    IMMUDB_CLIENTCAS="/usr/share/immudb/mtls/2_intermediate/certs/ca-chain.pem" \
+    IMMUDB_DEVMODE="true" \
+    IMMUDB_MAINTENANCE="false" \
+    IMMUDB_ADMIN_PASSWORD="immudb" \
+    IMMUADMIN_TOKENFILE="/var/lib/immudb/admin_token"
 
 RUN addgroup --system --gid $IMMU_GID immu && \
     adduser --system --uid $IMMU_UID --no-create-home --ingroup immu immu && \
@@ -39,4 +43,3 @@ EXPOSE 9497
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 CMD [ "/usr/local/bin/immuadmin", "status" ]
 USER immu
 ENTRYPOINT ["/usr/sbin/immudb"]
-

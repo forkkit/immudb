@@ -35,6 +35,8 @@ func getPrevRootIdx(lastIndex uint64, rootIdx *schema.Index) (uint64, error) {
 	return 0, nil
 }
 
+// SafeSet adds an entry and returns the inclusion proof for it and
+// the consistency proof for the previous root
 func (t *Store) SafeSet(options schema.SafeSetOptions) (proof *schema.Proof, err error) {
 	kv := options.Kv
 
@@ -49,17 +51,28 @@ func (t *Store) SafeSet(options schema.SafeSetOptions) (proof *schema.Proof, err
 
 	txn := t.db.NewTransactionAt(math.MaxUint64, true)
 	defer txn.Discard()
+
+	tsEntry := t.tree.NewEntry(kv.Key, kv.Value)
+
 	if err = txn.SetEntry(&badger.Entry{
 		Key:   kv.Key,
-		Value: kv.Value,
+		Value: wrapValueWithTS(kv.Value, tsEntry.ts),
 	}); err != nil {
 		err = mapError(err)
 		return
 	}
 
-	tsEntry := t.tree.NewEntry(kv.Key, kv.Value)
 	index := tsEntry.Index()
 	leaf := tsEntry.HashCopy()
+
+	if err = txn.SetEntry(&badger.Entry{
+		Key:      treeKey(uint8(0), tsEntry.ts-1),
+		Value:    refTreeKey(*tsEntry.h, *tsEntry.r),
+		UserMeta: bitTreeEntry,
+	}); err != nil {
+		err = mapError(err)
+		return
+	}
 
 	err = txn.CommitAt(tsEntry.ts, nil)
 	if err != nil {
@@ -89,6 +102,8 @@ func (t *Store) SafeSet(options schema.SafeSetOptions) (proof *schema.Proof, err
 	return
 }
 
+// SafeGet fetches the entry having the specified key together with the inclusion proof
+// for it and the consistency proof for the current root
 func (t *Store) SafeGet(options schema.SafeGetOptions) (safeItem *schema.SafeItem, err error) {
 	var item *schema.Item
 	var i *badger.Item
@@ -114,7 +129,7 @@ func (t *Store) SafeGet(options schema.SafeGetOptions) (safeItem *schema.SafeIte
 	if err == nil && i.UserMeta()&bitReferenceEntry == bitReferenceEntry {
 		var refKey []byte
 		err = i.Value(func(val []byte) error {
-			refKey = append([]byte{}, val...)
+			refKey, _ = unwrapValueWithTS(val)
 			return nil
 		})
 		if err != nil {
@@ -154,6 +169,8 @@ func (t *Store) SafeGet(options schema.SafeGetOptions) (safeItem *schema.SafeIte
 	return
 }
 
+// SafeReference adds a reference entry to an existing key and returns the
+// inclusion proof for it and the consistency proof for the previous root
 func (t *Store) SafeReference(options schema.SafeReferenceOptions) (proof *schema.Proof, err error) {
 	ro := options.Ro
 	if err = checkKey(ro.Key); err != nil {
@@ -177,19 +194,28 @@ func (t *Store) SafeReference(options schema.SafeReferenceOptions) (proof *schem
 		return
 	}
 
+	tsEntry := t.tree.NewEntry(ro.Reference, i.Key())
+
 	if err = txn.SetEntry(&badger.Entry{
 		Key:      ro.Reference,
-		Value:    i.Key(),
+		Value:    wrapValueWithTS(i.Key(), tsEntry.ts),
 		UserMeta: bitReferenceEntry,
 	}); err != nil {
 		err = mapError(err)
 		return
 	}
 
-	tsEntry := t.tree.NewEntry(ro.Reference, i.Key())
-
 	index := tsEntry.Index()
 	leaf := tsEntry.HashCopy()
+
+	if err = txn.SetEntry(&badger.Entry{
+		Key:      treeKey(uint8(0), tsEntry.ts-1),
+		Value:    refTreeKey(*tsEntry.h, *tsEntry.r),
+		UserMeta: bitTreeEntry,
+	}); err != nil {
+		err = mapError(err)
+		return
+	}
 
 	err = txn.CommitAt(tsEntry.ts, nil)
 	if err != nil {
@@ -219,6 +245,8 @@ func (t *Store) SafeReference(options schema.SafeReferenceOptions) (proof *schem
 	return
 }
 
+// SafeZAdd adds the specified score and key to the specified sorted set and returns
+// the inclusion proof for it and the consistency proof for the previous root
 func (t *Store) SafeZAdd(options schema.SafeZAddOptions) (proof *schema.Proof, err error) {
 
 	if err = checkKey(options.Zopts.Key); err != nil {
@@ -247,17 +275,28 @@ func (t *Store) SafeZAdd(options schema.SafeZAddOptions) (proof *schema.Proof, e
 		return
 	}
 
+	tsEntry := t.tree.NewEntry(ik, i.Key())
+
 	if err = txn.SetEntry(&badger.Entry{
 		Key:      ik,
-		Value:    i.Key(),
+		Value:    wrapValueWithTS(i.Key(), tsEntry.ts),
 		UserMeta: bitReferenceEntry,
 	}); err != nil {
 		err = mapError(err)
 		return
 	}
-	tsEntry := t.tree.NewEntry(ik, i.Key())
+
 	index := tsEntry.Index()
 	leaf := tsEntry.HashCopy()
+
+	if err = txn.SetEntry(&badger.Entry{
+		Key:      treeKey(uint8(0), tsEntry.ts-1),
+		Value:    refTreeKey(*tsEntry.h, *tsEntry.r),
+		UserMeta: bitTreeEntry,
+	}); err != nil {
+		err = mapError(err)
+		return
+	}
 
 	err = txn.CommitAt(tsEntry.ts, nil)
 	if err != nil {
@@ -285,4 +324,45 @@ func (t *Store) SafeZAdd(options schema.SafeZAddOptions) (proof *schema.Proof, e
 	}
 
 	return
+}
+
+// BySafeIndex fetches the entry at the specified index together with the inclusion proof
+// for it and the consistency proof for the current root
+func (t *Store) BySafeIndex(options schema.SafeIndexOptions) (safeitem *schema.SafeItem, err error) {
+
+	var item *schema.Item
+
+	idx, key, value, err := t.itemAt(options.Index + 1)
+	if err != nil {
+		return nil, err
+	}
+
+	item = &schema.Item{Key: key, Value: value, Index: idx}
+
+	prevRootIdx, err := getPrevRootIdx(t.tree.LastIndex(), options.RootIndex)
+	if err != nil {
+		return
+	}
+
+	safeItem := &schema.SafeItem{
+		Item: item,
+	}
+
+	t.tree.WaitUntil(item.Index)
+	t.tree.RLock()
+	defer t.tree.RUnlock()
+
+	at := t.tree.w - 1
+	root := merkletree.Root(t.tree)
+
+	safeItem.Proof = &schema.Proof{
+		Leaf:            item.Hash(),
+		Index:           item.Index,
+		Root:            root[:],
+		At:              at,
+		InclusionPath:   merkletree.InclusionProof(t.tree, at, item.Index).ToSlice(),
+		ConsistencyPath: merkletree.ConsistencyProof(t.tree, at, prevRootIdx).ToSlice(),
+	}
+
+	return safeItem, err
 }

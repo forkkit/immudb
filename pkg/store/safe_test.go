@@ -18,6 +18,7 @@ package store
 
 import (
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/codenotary/immudb/pkg/api"
@@ -41,7 +42,7 @@ func TestStoreSafeSet(t *testing.T) {
 				Value: []byte(strconv.FormatUint(n, 10)),
 			},
 			RootIndex: &schema.Index{
-				Index: root.Index,
+				Index: root.GetIndex(),
 			},
 		}
 		proof, err := st.SafeSet(opts)
@@ -53,8 +54,8 @@ func TestStoreSafeSet(t *testing.T) {
 		verified := proof.Verify(leaf[:], *root)
 		assert.True(t, verified, "n=%d", n)
 
-		root.Index = proof.At
-		root.Root = proof.Root
+		root.SetIndex(proof.At)
+		root.SetRoot(proof.Root)
 	}
 
 	for n := uint64(0); n <= 64; n++ {
@@ -67,6 +68,97 @@ func TestStoreSafeSet(t *testing.T) {
 	}
 
 	assert.Equal(t, root64th, merkletree.Root(st.tree))
+}
+
+func TestStoreMultithreadSafeSetWithKeyOverlap(t *testing.T) {
+	st, closer := makeStore()
+	defer closer()
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(tid int) {
+			root, err := st.CurrentRoot()
+			assert.NotNil(t, root)
+			assert.NoError(t, err)
+
+			for n := uint64(0); n < 256; n++ {
+				opts := schema.SafeSetOptions{
+					Kv: &schema.KeyValue{
+						Key:   []byte(strconv.FormatUint(n, 10)),
+						Value: []byte(strconv.FormatUint(uint64(tid), 10)),
+					},
+					RootIndex: &schema.Index{
+						Index: root.GetIndex(),
+					},
+				}
+				proof, err := st.SafeSet(opts)
+				assert.NoError(t, err, "n=%d", n)
+				assert.NotNil(t, proof, "n=%d", n)
+
+				leaf := api.Digest(proof.Index, opts.Kv.Key, opts.Kv.Value)
+				verified := proof.Verify(leaf[:], *root)
+				assert.True(t, verified, "n=%d", n)
+
+				root = &schema.Root{
+					Payload: &schema.RootIndex{
+						Index: proof.At,
+						Root:  proof.Root,
+					},
+				}
+			}
+			wg.Done()
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+func TestStoreMultithreadSafeSetWithoutKeyOverlap(t *testing.T) {
+	st, closer := makeStore()
+	defer closer()
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(tid int) {
+			root, err := st.CurrentRoot()
+			assert.NotNil(t, root)
+			assert.NoError(t, err)
+
+			for n := uint64(0); n < 256; n++ {
+				opts := schema.SafeSetOptions{
+					Kv: &schema.KeyValue{
+						Key:   []byte(strconv.FormatUint(uint64(tid<<10)+n, 10)),
+						Value: []byte(strconv.FormatUint(uint64(tid), 10)),
+					},
+					RootIndex: &schema.Index{
+						Index: root.GetIndex(),
+					},
+				}
+
+				proof, err := st.SafeSet(opts)
+				assert.NoError(t, err, "n=%d", n)
+				assert.NotNil(t, proof, "n=%d", n)
+
+				leaf := api.Digest(proof.Index, opts.Kv.Key, opts.Kv.Value)
+				verified := proof.Verify(leaf[:], *root)
+				assert.True(t, verified, "n=%d", n)
+
+				root = &schema.Root{
+					Payload: &schema.RootIndex{
+						Index: proof.At,
+						Root:  proof.Root,
+					},
+				}
+			}
+			wg.Done()
+		}(i)
+	}
+
+	wg.Wait()
 }
 
 func TestStoreSafeGet(t *testing.T) {
@@ -90,7 +182,7 @@ func TestStoreSafeGet(t *testing.T) {
 	assert.Equal(t, firstItem.Index, safeItem.Item.Index)
 	assert.True(t, safeItem.Proof.Verify(
 		safeItem.Item.Hash(),
-		schema.Root{}, // zerovalue signals no prev root
+		schema.Root{Payload: &schema.RootIndex{}}, // zerovalue signals no prev root
 	))
 
 	// second item with prev root
@@ -98,7 +190,7 @@ func TestStoreSafeGet(t *testing.T) {
 	safeItem, err = st.SafeGet(schema.SafeGetOptions{
 		Key: []byte(`second`),
 		RootIndex: &schema.Index{
-			Index: prevRoot.Index,
+			Index: prevRoot.GetIndex(),
 		},
 	})
 	assert.NoError(t, err)
@@ -114,7 +206,7 @@ func TestStoreSafeGet(t *testing.T) {
 	lastRoot, err := st.CurrentRoot()
 	assert.NoError(t, err)
 	assert.NotNil(t, lastRoot)
-	assert.Equal(t, *lastRoot, *safeItem.Proof.NewRoot())
+	assert.Equal(t, *lastRoot.Payload, *safeItem.Proof.NewRoot().Payload)
 
 }
 
@@ -156,7 +248,7 @@ func TestStoreSafeReference(t *testing.T) {
 				Key:       firstKey,
 			},
 			RootIndex: &schema.Index{
-				Index: root.Index,
+				Index: root.GetIndex(),
 			},
 		}
 		proof, err := st.SafeReference(opts)
@@ -168,8 +260,8 @@ func TestStoreSafeReference(t *testing.T) {
 		verified := proof.Verify(leaf[:], *root)
 		assert.True(t, verified, "n=%d", n)
 
-		root.Index = proof.At
-		root.Root = proof.Root
+		root.SetIndex(proof.At)
+		root.SetRoot(proof.Root)
 	}
 
 	for n := uint64(0); n <= 64; n++ {
@@ -207,7 +299,7 @@ func TestStoreSafeGetOnSafeReference(t *testing.T) {
 
 	leaf := api.Digest(proof.Index, firstTag, firstKey)
 	// Here verify if first reference was correctly inserted. We have no root yet.
-	verified := proof.Verify(leaf[:], schema.Root{})
+	verified := proof.Verify(leaf[:], schema.Root{Payload: &schema.RootIndex{}})
 	assert.True(t, verified)
 
 	ref2 := schema.SafeReferenceOptions{
@@ -268,7 +360,7 @@ func TestStoreSafeGetOnSafeReference(t *testing.T) {
 	lastRoot, err := st.CurrentRoot()
 	assert.NoError(t, err)
 	assert.NotNil(t, lastRoot)
-	assert.Equal(t, *lastRoot, *firstItem2.Proof.NewRoot())
+	assert.Equal(t, *lastRoot.Payload, *firstItem2.Proof.NewRoot().Payload)
 }
 
 func TestStoreSafeZAdd(t *testing.T) {
@@ -297,12 +389,14 @@ func TestStoreSafeZAdd(t *testing.T) {
 
 	leaf := api.Digest(proof1.Index, key, safeZAddOptions1.Zopts.Key)
 	// Here verify if first reference was correctly inserted. We have no root yet.
-	verified := proof1.Verify(leaf[:], schema.Root{})
+	verified := proof1.Verify(leaf[:], schema.Root{Payload: &schema.RootIndex{}})
 	assert.True(t, verified)
 
 	root := schema.Root{
-		Index: proof1.Index,
-		Root:  proof1.Root,
+		Payload: &schema.RootIndex{
+			Index: proof1.Index,
+			Root:  proof1.Root,
+		},
 	}
 	safeZAddOptions2 := schema.SafeZAddOptions{
 		Zopts: &schema.ZAddOptions{
@@ -327,4 +421,146 @@ func TestStoreSafeZAdd(t *testing.T) {
 	// Here verify if first reference was correctly inserted. We have no root yet.
 	verified2 := proof2.Verify(leaf2[:], root)
 	assert.True(t, verified2)
+}
+
+func TestStoreBySafeIndex(t *testing.T) {
+	st, closer := makeStore()
+	defer closer()
+
+	_, err := st.Set(schema.KeyValue{Key: []byte(`myFirstElementKey`), Value: []byte(`firstValue`)})
+	assert.NoError(t, err)
+	_, err = st.Set(schema.KeyValue{Key: []byte(`mySecondElementKey`), Value: []byte(`secondValue`)})
+	assert.NoError(t, err)
+	_, err = st.Set(schema.KeyValue{Key: []byte(`myThirdElementKey`), Value: []byte(`thirdValue`)})
+	assert.NoError(t, err)
+
+	sio1 := schema.SafeIndexOptions{
+		Index: uint64(1),
+	}
+
+	st.tree.WaitUntil(2)
+
+	safeItem, err := st.BySafeIndex(sio1)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, safeItem)
+	assert.Equal(t, []byte(`mySecondElementKey`), safeItem.Item.Key)
+	assert.Equal(t, []byte(`secondValue`), safeItem.Item.Value)
+	assert.Equal(t, uint64(1), safeItem.Item.Index)
+	assert.True(t, safeItem.Proof.Verify(
+		safeItem.Item.Hash(),
+		*schema.NewRoot(), // zerovalue signals no prev root
+	))
+
+	// second item with prev root
+	prevRoot := safeItem.Proof.NewRoot()
+	sio2 := schema.SafeIndexOptions{
+		Index: uint64(2),
+		RootIndex: &schema.Index{
+			Index: prevRoot.GetIndex(),
+		},
+	}
+
+	safeItem2, err := st.BySafeIndex(sio2)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, safeItem2)
+	assert.Equal(t, []byte(`myThirdElementKey`), safeItem2.Item.Key)
+	assert.Equal(t, []byte(`thirdValue`), safeItem2.Item.Value)
+	assert.Equal(t, uint64(2), safeItem2.Item.Index)
+	assert.True(t, safeItem2.Proof.Verify(
+		safeItem2.Item.Hash(),
+		*prevRoot,
+	))
+
+	lastRoot, err := st.CurrentRoot()
+	assert.NoError(t, err)
+	assert.NotNil(t, lastRoot)
+	assert.Equal(t, *lastRoot.Payload, *safeItem2.Proof.NewRoot().Payload)
+}
+
+func TestStoreBySafeIndexOnSafeZAdd(t *testing.T) {
+	st, closer := makeStore()
+	defer closer()
+
+	st.Set(schema.KeyValue{Key: []byte(`myFirstElementKey`), Value: []byte(`firstValue`)})
+	st.Set(schema.KeyValue{Key: []byte(`mySecondElementKey`), Value: []byte(`secondValue`)})
+	st.Set(schema.KeyValue{Key: []byte(`myThirdElementKey`), Value: []byte(`thirdValue`)})
+
+	safeZAddOptions1 := schema.SafeZAddOptions{
+		Zopts: &schema.ZAddOptions{
+			Set:   []byte(`FirstSet`),
+			Score: float64(43),
+			Key:   []byte(`mySecondElementKey`),
+		},
+	}
+
+	proof1, err := st.SafeZAdd(safeZAddOptions1)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, proof1)
+	assert.Equal(t, uint64(3), proof1.Index)
+
+	key, _ := SetKey(safeZAddOptions1.Zopts.Key, safeZAddOptions1.Zopts.Set, safeZAddOptions1.Zopts.Score)
+
+	leaf := api.Digest(proof1.Index, key, safeZAddOptions1.Zopts.Key)
+	// Here verify if first reference was correctly inserted. We have no root yet.
+	verified := proof1.Verify(leaf[:], schema.Root{Payload: &schema.RootIndex{}})
+	assert.True(t, verified)
+
+	root := schema.Root{
+		Payload: &schema.RootIndex{
+			Index: proof1.Index,
+			Root:  proof1.Root,
+		},
+	}
+	safeZAddOptions2 := schema.SafeZAddOptions{
+		Zopts: &schema.ZAddOptions{
+			Set:   []byte(`FirstSet`),
+			Score: float64(43.548),
+			Key:   []byte(`myThirdElementKey`),
+		},
+		RootIndex: &schema.Index{
+			Index: proof1.Index,
+		},
+	}
+
+	proof2, err2 := st.SafeZAdd(safeZAddOptions2)
+
+	assert.NoError(t, err2)
+	assert.NotNil(t, proof2)
+	assert.Equal(t, uint64(4), proof2.Index)
+
+	key2, _ := SetKey(safeZAddOptions2.Zopts.Key, safeZAddOptions2.Zopts.Set, safeZAddOptions2.Zopts.Score)
+
+	leaf2 := api.Digest(proof2.Index, key2, safeZAddOptions2.Zopts.Key)
+	// Here verify if first reference was correctly inserted. We have no root yet.
+	verified2 := proof2.Verify(leaf2[:], root)
+	assert.True(t, verified2)
+
+	// second item with prev root
+	prevRoot := schema.Root{
+		Payload: &schema.RootIndex{
+			Index: proof2.Index,
+			Root:  proof2.Root,
+		},
+	}
+	sio2 := schema.SafeIndexOptions{
+		Index: uint64(2),
+		RootIndex: &schema.Index{
+			Index: prevRoot.GetIndex(),
+		},
+	}
+
+	safeItem2, err := st.BySafeIndex(sio2)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, safeItem2)
+	assert.Equal(t, []byte(`myThirdElementKey`), safeItem2.Item.Key)
+	assert.Equal(t, []byte(`thirdValue`), safeItem2.Item.Value)
+	assert.Equal(t, uint64(2), safeItem2.Item.Index)
+	assert.True(t, safeItem2.Proof.Verify(
+		safeItem2.Item.Hash(),
+		prevRoot,
+	))
 }

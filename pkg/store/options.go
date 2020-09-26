@@ -24,32 +24,25 @@ import (
 	"runtime"
 )
 
+// Options ...
 type Options struct {
-	Badger badger.Options
+	log logger.Logger
 }
 
-func DefaultOptions(path string, log logger.Logger) Options {
-	opt := badger.DefaultOptions(path).
-		WithLogger(log).
+// DefaultOptions ...
+func DefaultOptions(path string, log logger.Logger) (Options, badger.Options) {
+	badgerOptions := badger.DefaultOptions(path).
+		WithLogger(log.CloneWithLevel(logger.LogWarn)).
 		WithSyncWrites(false).
 		WithEventLogging(false)
-
 	// set Truncate to true according to https://github.com/dgraph-io/badger/issues/476#issuecomment-388122680
 	if runtime.GOOS == "windows" {
-		opt.Truncate = true
+		badgerOptions.Truncate = true
 	}
-
-	return Options{
-		Badger: opt,
-	}
+	return Options{log}, badgerOptions
 }
 
-func (o Options) dataStore() badger.Options {
-	opt := o.Badger
-	opt.ValueDir = opt.Dir
-	return opt
-}
-
+// WriteOptions ...
 type WriteOptions struct {
 	asyncCommit bool
 }
@@ -62,8 +55,10 @@ func makeWriteOptions(opts ...WriteOption) *WriteOptions {
 	return wo
 }
 
+// WriteOption ...
 type WriteOption func(*WriteOptions)
 
+// WithAsyncCommit ...
 func WithAsyncCommit(async bool) WriteOption {
 	return func(opts *WriteOptions) {
 		opts.asyncCommit = async

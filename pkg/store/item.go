@@ -29,22 +29,25 @@ func itemToSchema(key []byte, item *badger.Item) (*schema.Item, error) {
 	if key == nil || len(key) == 0 {
 		key = item.KeyCopy(key)
 	}
+
+	v, ts := unwrapValueWithTS(value)
+
 	return &schema.Item{
 		Key:   key,
-		Value: value,
-		Index: item.Version() - 1,
+		Value: v,
+		Index: ts - 1,
 	}, nil
 }
 
 func checkKey(key []byte) error {
-	if len(key) == 0 || key[0] == tsPrefix {
+	if len(key) == 0 || isReservedKey(key) {
 		return ErrInvalidKey
 	}
 	return nil
 }
 
 func checkSet(key []byte) error {
-	if len(key) == 0 || key[0] == tsPrefix {
+	if len(key) == 0 || isReservedKey(key) {
 		return ErrInvalidSet
 	}
 	return nil

@@ -17,36 +17,66 @@ limitations under the License.
 package immuclient
 
 import (
+	"fmt"
+	"github.com/codenotary/immudb/cmd/docs/man"
 	c "github.com/codenotary/immudb/cmd/helper"
 	"github.com/codenotary/immudb/cmd/version"
 	"github.com/spf13/cobra"
+	"os"
+	"strings"
 )
 
-var o = c.Options{}
-
-func init() {
-	cobra.OnInitialize(func() { o.InitConfig("immuclient") })
+func Execute() {
+	cmd := newCommand()
+	if isCommand(commandNames(cmd.Commands())) {
+		if err := cmd.Execute(); err != nil {
+			fmt.Println(cmd.Aliases)
+			if strings.HasPrefix(err.Error(), "unknown command") {
+				os.Exit(0)
+			}
+			c.QuitWithUserError(err)
+		}
+		return
+	}
 }
 
-func NewCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "immuclient",
-		Short: "CLI client for immudb - the lightweight, high-speed immutable database for systems and applications",
-		Long: `CLI client for immudb - the lightweight, high-speed immutable database for systems and applications.
-Environment variables:
-  IMMUCLIENT_IMMUDB-ADDRESS=127.0.0.1
-  IMMUCLIENT_IMMUDB-PORT=3322
-  IMMUCLIENT_AUTH=false
-  IMMUCLIENT_MTLS=false
-  IMMUCLIENT_SERVERNAME=localhost
-  IMMUCLIENT_PKEY=./tools/mtls/4_client/private/localhost.key.pem
-  IMMUCLIENT_CERTIFICATE=./tools/mtls/4_client/certs/localhost.cert.pem
-  IMMUCLIENT_CLIENTCAS=./tools/mtls/2_intermediate/certs/ca-chain.cert.pem`,
-		DisableAutoGenTag: true,
+func newCommand() *cobra.Command {
+	version.App = "immuclient"
+	cl := NewCommandLine()
+	cmd, err := cl.NewCmd()
+	if err != nil {
+		c.QuitToStdErr(err)
 	}
 
-	Init(cmd, &o)
+	// login and logout
+	cl.Register(cmd)
+	// man file generator
+	cmd.AddCommand(man.Generate(cmd, "immuclient", "./cmd/docs/man/immuclient"))
 	cmd.AddCommand(version.VersionCmd())
-
 	return cmd
+}
+
+func isCommand(args []string) bool {
+	if len(os.Args) > 1 {
+		if strings.HasPrefix(os.Args[1], "-") {
+			for i := range args {
+				for j := range os.Args {
+					if args[i] == os.Args[j] {
+						fmt.Printf("Please sort your commands in \"immudb [command] [flags]\" order. \n")
+						return true
+					}
+				}
+			}
+		}
+	}
+	return true
+}
+
+func commandNames(cms []*cobra.Command) []string {
+	args := make([]string, 0)
+	for i := range cms {
+		arg := strings.Split(cms[i].Use, " ")[0]
+		args = append(args, arg)
+	}
+	return args
 }

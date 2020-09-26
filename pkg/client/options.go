@@ -20,9 +20,14 @@ import (
 	"encoding/json"
 	"strconv"
 
+	c "github.com/codenotary/immudb/cmd/helper"
 	"google.golang.org/grpc"
 )
 
+// AdminTokenFileSuffix is the suffix used for the token file name
+const AdminTokenFileSuffix = "_admin"
+
+// Options client options
 type Options struct {
 	Dir                string
 	Address            string
@@ -34,8 +39,17 @@ type Options struct {
 	DialOptions        *[]grpc.DialOption
 	Config             string
 	TokenFileName      string
+	CurrentDatabase    string
+	PasswordReader     c.PasswordReader
+	Tkns               TokenService
+	Metrics            bool
+	PidPath            string
+	PrometheusHost     string
+	PrometheusPort     string
+	LogFileName        string
 }
 
+// DefaultOptions ...
 func DefaultOptions() *Options {
 	return &Options{
 		Dir:                ".",
@@ -43,15 +57,52 @@ func DefaultOptions() *Options {
 		Port:               3322,
 		HealthCheckRetries: 5,
 		MTLs:               false,
-		Auth:               false,
+		Auth:               true,
 		Config:             "configs/immuclient.toml",
 		TokenFileName:      "token",
 		DialOptions:        &[]grpc.DialOption{},
+		PasswordReader:     c.DefaultPasswordReader,
+		Tkns:               NewTokenService().WithTokenFileName("token").WithHds(NewHomedirService()),
+		Metrics:            true,
+		PidPath:            "",
+		PrometheusHost:     "",
+		PrometheusPort:     "",
+		LogFileName:        "",
 	}
 }
 
+// WithLogFileName set log file name
+func (o *Options) WithLogFileName(filename string) *Options {
+	o.LogFileName = filename
+	return o
+}
+
+// WithPrometheusHost set prometheus host
+func (o *Options) WithPrometheusHost(host string) *Options {
+	o.PrometheusHost = host
+	return o
+}
+
+// WithPrometheusPort set prometheus port
+func (o *Options) WithPrometheusPort(port string) *Options {
+	o.PrometheusPort = port
+	return o
+}
+
+// WithPidPath set pid file path
+func (o *Options) WithPidPath(path string) *Options {
+	o.PidPath = path
+	return o
+}
+
+// WithMetrics set if metrics should start
+func (o *Options) WithMetrics(start bool) *Options {
+	o.Metrics = start
+	return o
+}
+
 // WithDir sets program file folder
-func (o Options) WithDir(dir string) Options {
+func (o *Options) WithDir(dir string) *Options {
 	o.Dir = dir
 	return o
 }
@@ -64,7 +115,9 @@ func (o *Options) WithAddress(address string) *Options {
 
 // WithPort sets port
 func (o *Options) WithPort(port int) *Options {
-	o.Port = port
+	if port > 0 {
+		o.Port = port
+	}
 	return o
 }
 
@@ -110,14 +163,27 @@ func (o *Options) WithDialOptions(dialOptions *[]grpc.DialOption) *Options {
 	return o
 }
 
+// Bind concatenates address and port
 func (o *Options) Bind() string {
 	return o.Address + ":" + strconv.Itoa(o.Port)
 }
 
+// WithPasswordReader sets the password reader for the client
+func (o *Options) WithPasswordReader(pr c.PasswordReader) *Options {
+	o.PasswordReader = pr
+	return o
+}
+
+// WithTokenService sets the TokenService for the client
+func (o *Options) WithTokenService(tkns TokenService) *Options {
+	o.Tkns = tkns
+	return o
+}
+
 func (o *Options) String() string {
-	optionsJson, err := json.Marshal(o)
+	optionsJSON, err := json.Marshal(o)
 	if err != nil {
 		return err.Error()
 	}
-	return string(optionsJson)
+	return string(optionsJSON)
 }

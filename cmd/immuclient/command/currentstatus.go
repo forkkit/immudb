@@ -17,9 +17,8 @@ limitations under the License.
 package immuclient
 
 import (
-	"context"
+	"fmt"
 
-	c "github.com/codenotary/immudb/cmd/helper"
 	"github.com/spf13/cobra"
 )
 
@@ -28,15 +27,14 @@ func (cl *commandline) currentRoot(cmd *cobra.Command) {
 		Use:               "current",
 		Short:             "Return the last merkle tree root and index stored locally",
 		Aliases:           []string{"crt"},
-		PersistentPreRunE: cl.connect,
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
 		PersistentPostRun: cl.disconnect,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
-			root, err := cl.ImmuClient.CurrentRoot(ctx)
+			resp, err := cl.immucl.CurrentRoot(args)
 			if err != nil {
-				c.QuitWithUserError(err)
+				cl.quit(err)
 			}
-			printRoot(root)
+			fmt.Fprintf(cmd.OutOrStdout(), resp+"\n")
 			return nil
 		},
 		Args: cobra.ExactArgs(0),

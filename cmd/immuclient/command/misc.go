@@ -17,14 +17,11 @@ limitations under the License.
 package immuclient
 
 import (
-	"bytes"
-	"context"
 	"fmt"
-	"io/ioutil"
-	"os"
-	"time"
 
-	c "github.com/codenotary/immudb/cmd/helper"
+	"github.com/codenotary/immudb/cmd/immuclient/audit"
+	"github.com/codenotary/immudb/cmd/immuclient/cli"
+	service "github.com/codenotary/immudb/cmd/immuclient/service/constants"
 	"github.com/spf13/cobra"
 )
 
@@ -33,23 +30,14 @@ func (cl *commandline) history(cmd *cobra.Command) {
 		Use:               "history key",
 		Short:             "Fetch history for the item having the specified key",
 		Aliases:           []string{"h"},
-		PersistentPreRunE: cl.connect,
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
 		PersistentPostRun: cl.disconnect,
 		RunE: func(cmd *cobra.Command, args []string) error {
-
-			key, err := ioutil.ReadAll(bytes.NewReader([]byte(args[0])))
+			resp, err := cl.immucl.History(args)
 			if err != nil {
-				c.QuitToStdErr(err)
+				cl.quit(err)
 			}
-			ctx := context.Background()
-			response, err := cl.ImmuClient.History(ctx, key)
-			if err != nil {
-				c.QuitWithUserError(err)
-			}
-			for _, item := range response.Items {
-				printItem(nil, nil, item)
-				fmt.Println()
-			}
+			fmt.Fprintf(cmd.OutOrStdout(), resp+"\n")
 			return nil
 		},
 		Args: cobra.ExactArgs(1),
@@ -57,20 +45,19 @@ func (cl *commandline) history(cmd *cobra.Command) {
 	cmd.AddCommand(ccmd)
 }
 
-func (cl *commandline) healthCheck(cmd *cobra.Command) {
+func (cl *commandline) status(cmd *cobra.Command) {
 	ccmd := &cobra.Command{
-		Use:               "ping",
+		Use:               "status",
 		Short:             "Ping to check if server connection is alive",
 		Aliases:           []string{"p"},
-		PersistentPreRunE: cl.connect,
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
 		PersistentPostRun: cl.disconnect,
 		RunE: func(cmd *cobra.Command, args []string) error {
-
-			ctx := context.Background()
-			if err := cl.ImmuClient.HealthCheck(ctx); err != nil {
-				c.QuitWithUserError(err)
+			resp, err := cl.immucl.HealthCheck(args)
+			if err != nil {
+				cl.quit(err)
 			}
-			fmt.Println("Health check OK")
+			fmt.Fprintf(cmd.OutOrStdout(), resp+"\n")
 			return nil
 		},
 		Args: cobra.NoArgs,
@@ -78,33 +65,55 @@ func (cl *commandline) healthCheck(cmd *cobra.Command) {
 	cmd.AddCommand(ccmd)
 }
 
-func (cl *commandline) dumpToFile(cmd *cobra.Command) {
+func (cl *commandline) auditmode(cmd *cobra.Command) {
 	ccmd := &cobra.Command{
-		Use:               "dump [file]",
-		Short:             "Dump database content to a file",
-		Aliases:           []string{"b"},
-		PersistentPreRunE: cl.connect,
-		PersistentPostRun: cl.disconnect,
+		Use:       "audit-mode command",
+		Short:     "Starts immuclient as daemon in auditor mode. Run 'immuclient audit-mode help' or use -h flag for details",
+		Aliases:   []string{"audit-mode"},
+		Example:   service.UsageExamples,
+		ValidArgs: []string{"help", "start", "install", "uninstall", "restart", "stop", "status"},
 		RunE: func(cmd *cobra.Command, args []string) error {
-
-			filename := fmt.Sprint("immudb_" + time.Now().Format("2006-01-02_15-04-05") + ".bkp")
-			if len(args) > 0 {
-				filename = args[0]
+			if err := audit.Init(args, cmd.Parent()); err != nil {
+				cl.quit(err)
 			}
-			file, err := os.Create(filename)
-			defer file.Close()
-			if err != nil {
-				c.QuitToStdErr(err)
-			}
-			ctx := context.Background()
-			response, err := cl.ImmuClient.Dump(ctx, file)
-			if err != nil {
-				c.QuitWithUserError(err)
-			}
-			fmt.Printf("SUCCESS: %d key-value entries were backed-up to file %s\n", response, filename)
 			return nil
 		},
-		Args: cobra.MaximumNArgs(1),
+	}
+	cmd.AddCommand(ccmd)
+}
+
+// #TODO will be new root.
+func (cl *commandline) interactiveCli(cmd *cobra.Command) {
+	ccmd := &cobra.Command{
+		Use:     "it",
+		Short:   "Starts immuclient in CLI mode. Use 'help' or -h flag on the shell for details",
+		Aliases: []string{"cli-mode"},
+		Example: cli.Init(cl.immucl).HelpMessage(),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cli.Init(cl.immucl).Run()
+			return nil
+		},
+	}
+	cmd.AddCommand(ccmd)
+}
+
+func (cl *commandline) use(cmd *cobra.Command) {
+	ccmd := &cobra.Command{
+		Use:               "use",
+		Short:             "Select database",
+		Example:           "use {database_name}",
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
+		PersistentPostRun: cl.disconnect,
+		ValidArgs:         []string{"databasename"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := cl.immucl.UseDatabase(args)
+			if err != nil {
+				cl.quit(err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), resp+"\n")
+			return nil
+		},
+		Args: cobra.MinimumNArgs(1),
 	}
 	cmd.AddCommand(ccmd)
 }

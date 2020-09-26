@@ -21,6 +21,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/codenotary/immudb/cmd/immudb/command/immudbcmdtest"
 	"github.com/codenotary/immudb/pkg/server"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -32,7 +33,6 @@ func DefaultTestOptions() (o server.Options) {
 	o.Pidfile = "tmp/immudbtest/immudbtest.pid"
 	o.Logfile = "immudbtest.log"
 	o.Dir = "tmp/immudbtest/data"
-	o.DbName = "immudbtest"
 	o.MTLs = false
 	return o
 }
@@ -45,15 +45,19 @@ func TestImmudbCommandFlagParser(t *testing.T) {
 	cmd := &cobra.Command{
 		Use: "immudb",
 		RunE: func(cmd *cobra.Command, args []string) (err error) {
-			options, err = parseOptions(cmd)
+			options, err = parseOptions()
 			if err != nil {
 				return err
 			}
 			return nil
 		},
 	}
-	setupFlags(cmd, server.DefaultOptions(), server.DefaultMTLsOptions())
-	bindFlags(cmd)
+	cl := Commandline{}
+	cl.setupFlags(cmd, server.DefaultOptions(), server.DefaultMTLsOptions())
+
+	err = viper.BindPFlags(cmd.Flags())
+	assert.Nil(t, err)
+
 	setupDefaults(server.DefaultOptions(), server.DefaultMTLsOptions())
 
 	_, err = executeCommand(cmd, "--logfile="+o.Logfile)
@@ -71,18 +75,25 @@ func TestImmudbCommandFlagParserPriority(t *testing.T) {
 	o := DefaultTestOptions()
 	var options server.Options
 	var err error
+	cl := Commandline{}
+	cl.config.Name = "immudb"
+
 	cmd := &cobra.Command{
-		Use: "immudb",
+		Use:               "immudb",
+		PersistentPreRunE: cl.ConfigChain(nil),
 		RunE: func(cmd *cobra.Command, args []string) (err error) {
-			options, err = parseOptions(cmd)
+			options, err = parseOptions()
 			if err != nil {
 				return err
 			}
 			return nil
 		},
 	}
-	setupFlags(cmd, server.DefaultOptions(), server.DefaultMTLsOptions())
-	bindFlags(cmd)
+	cl.setupFlags(cmd, server.DefaultOptions(), server.DefaultMTLsOptions())
+
+	err = viper.BindPFlags(cmd.Flags())
+	assert.Nil(t, err)
+
 	setupDefaults(server.DefaultOptions(), server.DefaultMTLsOptions())
 
 	// 4. config file
@@ -128,4 +139,65 @@ func executeCommandC(root *cobra.Command, args ...string) (c *cobra.Command, out
 
 func tearDown() {
 	os.Unsetenv("IMMUDB_LOGFILE")
+}
+
+func TestImmudb(t *testing.T) {
+	var config string
+	cmd := &cobra.Command{}
+	cmd.Flags().StringVar(&config, "config", "", "test")
+
+	cl := Commandline{}
+
+	immudb := cl.Immudb(immudbcmdtest.ImmuServerMock{})
+	err := immudb(cmd, nil)
+	assert.Nil(t, err)
+
+}
+
+func TestImmudbDetached(t *testing.T) {
+	var config string
+	cmd := &cobra.Command{}
+	cmd.Flags().StringVar(&config, "config", "", "test")
+	viper.Set("detached", true)
+
+	cl := Commandline{P: plauncherMock{}}
+
+	immudb := cl.Immudb(immudbcmdtest.ImmuServerMock{})
+	err := immudb(cmd, nil)
+	assert.Nil(t, err)
+	viper.Set("detached", false)
+}
+
+func TestImmudbMtls(t *testing.T) {
+	var config string
+	cmd := &cobra.Command{}
+	cmd.Flags().StringVar(&config, "config", "", "test")
+	viper.Set("mtls", true)
+
+	cl := Commandline{}
+
+	immudb := cl.Immudb(immudbcmdtest.ImmuServerMock{})
+	err := immudb(cmd, nil)
+	assert.Nil(t, err)
+	viper.Set("mtls", false)
+}
+
+func TestImmudbLogFile(t *testing.T) {
+	var config string
+	cmd := &cobra.Command{}
+	cmd.Flags().StringVar(&config, "config", "", "test")
+	viper.Set("logfile", "override")
+	defer os.Remove("override")
+
+	cl := Commandline{}
+
+	immudb := cl.Immudb(immudbcmdtest.ImmuServerMock{})
+	err := immudb(cmd, nil)
+	assert.Nil(t, err)
+}
+
+type plauncherMock struct{}
+
+func (pl plauncherMock) Detached() error {
+	return nil
 }

@@ -29,14 +29,14 @@ func (cl *commandline) status(cmd *cobra.Command) {
 		Use:               "status",
 		Short:             "Show heartbeat status",
 		Aliases:           []string{"p"},
-		PersistentPreRunE: cl.connect,
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
 		PersistentPostRun: cl.disconnect,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cl.context
 			if err := cl.immuClient.HealthCheck(ctx); err != nil {
 				c.QuitWithUserError(err)
 			}
-			fmt.Println("OK - server is reachable and responding to queries")
+			fmt.Fprintf(cmd.OutOrStdout(), "OK - server is reachable and responding to queries\n")
 			return nil
 		},
 		Args: cobra.NoArgs,
@@ -49,7 +49,7 @@ func (cl *commandline) stats(cmd *cobra.Command) {
 		Use:               "stats",
 		Short:             fmt.Sprintf("Show statistics as text or visually with the '-v' option. Run 'immuadmin stats -h' for details."),
 		Aliases:           []string{"s"},
-		PersistentPreRunE: cl.connect,
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
 		PersistentPostRun: cl.disconnect,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			raw, err := cmd.Flags().GetBool("raw")
@@ -58,7 +58,7 @@ func (cl *commandline) stats(cmd *cobra.Command) {
 			}
 			options := cl.immuClient.GetOptions()
 			if raw {
-				if err := stats.ShowMetricsRaw(options.Address); err != nil {
+				if err := stats.ShowMetricsRaw(cmd.OutOrStderr(), options.Address); err != nil {
 					c.QuitToStdErr(err)
 				}
 				return nil
@@ -68,7 +68,7 @@ func (cl *commandline) stats(cmd *cobra.Command) {
 				c.QuitToStdErr(err)
 			}
 			if text {
-				if err := stats.ShowMetricsAsText(options.Address); err != nil {
+				if err := stats.ShowMetricsAsText(cmd.OutOrStderr(), options.Address); err != nil {
 					c.QuitToStdErr(err)
 				}
 				return nil

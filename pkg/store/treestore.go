@@ -17,6 +17,7 @@ limitations under the License.
 package store
 
 import (
+	"bytes"
 	"container/heap"
 	"crypto/sha256"
 	"encoding/binary"
@@ -39,8 +40,15 @@ import (
 )
 
 const tsPrefix = byte(0)
+
 const bitReferenceEntry = byte(1)
 const bitTreeEntry = byte(255)
+
+const lastFlushedMetaKey = "IMMUDB.METADATA.LAST_FLUSHED_LEAF"
+
+func isReservedKey(key []byte) bool {
+	return len(key) > 0 && (key[0] == tsPrefix || bytes.Equal(key, []byte(lastFlushedMetaKey)))
+}
 
 func treeKey(layer uint8, index uint64) []byte {
 	k := make([]byte, 1+1+8)
@@ -87,6 +95,20 @@ func decodeRefTreeKey(rtk []byte) ([sha256.Size]byte, []byte, error) {
 	return hArray, reference, nil
 }
 
+func wrapValueWithTS(v []byte, ts uint64) []byte {
+	tsv := make([]byte, len(v)+8)
+	binary.BigEndian.PutUint64(tsv, ts)
+	copy(tsv[8:], v)
+	return tsv
+}
+
+func unwrapValueWithTS(tsv []byte) ([]byte, uint64) {
+	v := make([]byte, len(tsv)-8)
+	ts := binary.BigEndian.Uint64(tsv[:8])
+	copy(v, tsv[8:])
+	return v, ts
+}
+
 func treeLayerWidth(layer uint8, txn *badger.Txn) uint64 {
 	opts := badger.DefaultIteratorOptions
 	opts.PrefetchValues = false
@@ -117,46 +139,53 @@ func (t treeStoreEntry) HashCopy() []byte {
 
 type treeStore struct {
 	// A 64-bit integer must be at the top for memory alignment
-	ts          uint64 // badger timestamp
-	w           uint64 // width of computed tree
-	c           chan *treeStoreEntry
-	quit        chan struct{}
-	lastFlushed uint64
-	db          *badger.DB
-	log         logger.Logger
-	caches      [256]ring.Buffer
-	rcaches     [256]ring.Buffer
-	cPos        [256]uint64
-	cSize       uint64
+	ts           uint64 // badger timestamp
+	w            uint64 // width of computed tree
+	c            chan *treeStoreEntry
+	quit         chan struct{}
+	lastFlushed  uint64
+	flushLeaves  bool
+	flushOnClose bool
+	db           *badger.DB
+	log          logger.Logger
+	caches       [256]ring.Buffer
+	rcache       ring.Buffer
+	cPos         [256]uint64
+	cSize        uint64
 	sync.RWMutex
 	closeOnce sync.Once
 }
 
-func newTreeStore(db *badger.DB, cacheSize uint64, log logger.Logger) *treeStore {
+func newTreeStore(db *badger.DB, cacheSize uint64, flushLeaves bool, log logger.Logger) (*treeStore, error) {
 
 	t := &treeStore{
-		db:     db,
-		log:    log,
-		c:      make(chan *treeStoreEntry, cacheSize),
-		quit:   make(chan struct{}),
-		caches: [256]ring.Buffer{},
-		cPos:   [256]uint64{},
-		cSize:  cacheSize,
+		db:          db,
+		log:         log,
+		c:           make(chan *treeStoreEntry, cacheSize),
+		quit:        make(chan struct{}),
+		caches:      [256]ring.Buffer{},
+		flushLeaves: flushLeaves,
+		cPos:        [256]uint64{},
+		cSize:       cacheSize,
 	}
 
 	t.makeCaches()
 
 	// load tree state
-	t.loadTreeState()
+	err := t.loadTreeState()
+	if err != nil {
+		return nil, err
+	}
 
 	go t.worker()
 
-	t.log.Infof("Tree of width %d ready with root %x", t.w, merkletree.Root(t))
-	return t
+	t.log.Debugf("Tree of width %d ready with root %x", t.w, merkletree.Root(t))
+
+	return t, nil
 }
 
-func (t *treeStore) loadTreeState() {
-	t.db.View(func(txn *badger.Txn) error {
+func (t *treeStore) loadTreeState() error {
+	return t.db.View(func(txn *badger.Txn) error {
 		for l := 0; l < 256; l++ {
 			w := treeLayerWidth(uint8(l), txn)
 			if w == 0 {
@@ -166,7 +195,24 @@ func (t *treeStore) loadTreeState() {
 		}
 		t.w = t.cPos[0]
 		t.ts = t.w
-		return nil
+
+		i, err := txn.Get([]byte(lastFlushedMetaKey))
+
+		if err == nil {
+			bs, err := i.ValueCopy(nil)
+			if err != nil {
+				return err
+			}
+			t.lastFlushed = binary.BigEndian.Uint64(bs)
+			return nil
+		}
+
+		if err == badger.ErrKeyNotFound {
+			t.lastFlushed = 0
+			return nil
+		}
+
+		return err
 	})
 }
 
@@ -177,24 +223,29 @@ func (t *treeStore) makeCaches() {
 	}
 	for i := 0; i < 256; i++ {
 		t.caches[i] = ring.NewRingBuffer(size)
-		if size > 64 {
+		if size/2 > 64 {
 			size /= 2
 		} else {
 			size = 64
 		}
 	}
-	t.rcaches[0] = ring.NewRingBuffer(t.cSize + 2)
+	t.rcache = ring.NewRingBuffer(t.cSize + 2)
 }
 
 // Close closes a treeStore. All pending items will be processed and flushed.
 // Calling treeStore.Close() multiple times would still only close the treeStore once.
 func (t *treeStore) Close() {
+	t.close(true)
+}
+
+func (t *treeStore) close(flushPending bool) {
 	t.closeOnce.Do(func() {
 		if t.quit != nil {
+			t.flushOnClose = flushPending
 			close(t.c)
 			<-t.quit
 			t.quit = nil
-			t.log.Infof("Tree of width %d closed with root %x", t.w, merkletree.Root(t))
+			t.log.Debugf("Tree of width %d closed with root %x", t.w, merkletree.Root(t))
 		}
 	})
 }
@@ -278,7 +329,7 @@ func (t *treeStore) worker() {
 			// insertion order index reference creation
 			c := refTreeKey(*item.h, *item.r)
 			// insertion order index cache save
-			t.rcaches[0].Set(item.ts-1, c)
+			t.rcache.Set(item.ts-1, c)
 
 			merkletree.AppendHash(t, item.h)
 			if t.w%2 == 0 && (t.w-t.lastFlushed) >= t.cSize/2 {
@@ -288,7 +339,7 @@ func (t *treeStore) worker() {
 		t.Unlock()
 	}
 
-	if t.w > 0 {
+	if t.w > 0 && t.flushOnClose {
 		t.Lock()
 		t.flush()
 		t.Unlock()
@@ -302,37 +353,48 @@ func (t *treeStore) worker() {
 func (t *treeStore) flush() {
 	t.log.Infof("Flushing tree caches at index %d", t.w-1)
 	var cancel bool
+	var emptyCaches bool = true
 	wb := t.db.NewWriteBatchAt(t.w)
 	defer func() {
 		if cancel {
 			wb.Cancel()
 			return
 		}
-		if err := wb.Flush(); err != nil {
-			t.log.Errorf("Tree flush error: %s", err)
-		} else {
+		advance := func() {
 			// advance cache indexes iff flushing has succeeded
 			for l, c := range t.caches {
 				t.cPos[l] = c.Tail()
 			}
 			t.lastFlushed = t.w
 		}
+		//workaround possible badger bug
+		//Commit cannot be called with managedDB=true. Use CommitAt.
+		if !emptyCaches {
+			err := wb.Flush()
+			if err != nil {
+				t.log.Errorf("Tree flush error: %s", err)
+				return
+			}
+			advance()
+		}
 	}()
-
 	for l, c := range t.caches {
 		tail := c.Tail()
 		if tail == 0 {
 			continue
 		}
-
+		emptyCaches = false
 		// fmt.Printf("Flushing [l=%d, head=%d, tail=%d] from %d to (%d-1)\n", l, c.Head(), c.Tail(), t.cPos[l], tail)
+		if !t.flushLeaves && l == 0 {
+			continue
+		}
 		for i := t.cPos[l]; i < tail; i++ {
 			if h := c.Get(i); h != nil {
 				var value []byte
 				value = h.(*[sha256.Size]byte)[:]
 				// retrieving insertion order index reference from buffer ring
 				if l == 0 {
-					value = t.rcaches[l].Get(i).([]byte)
+					value = t.rcache.Get(i).([]byte)
 				}
 				// fmt.Printf("Storing [l=%d, i=%d]\n", l, i)
 				entry := badger.Entry{
@@ -353,6 +415,25 @@ func (t *treeStore) flush() {
 			}
 		}
 	}
+
+	if !cancel && !emptyCaches {
+		sw := make([]byte, 8)
+		binary.BigEndian.PutUint64(sw, t.w)
+
+		entry := badger.Entry{
+			Key:   []byte(lastFlushedMetaKey),
+			Value: sw,
+		}
+		// only latest value is needed to replay entries
+		entry.WithDiscard()
+
+		if err := wb.SetEntry(&entry); err != nil {
+			t.log.Errorf("Cannot flush tree item: %v", err)
+			t.log.Warningf("Tree flush canceled")
+			cancel = true
+			return
+		}
+	}
 }
 
 func (t *treeStore) Width() uint64 {
@@ -361,7 +442,11 @@ func (t *treeStore) Width() uint64 {
 
 func (t *treeStore) Set(layer uint8, index uint64, value [sha256.Size]byte) {
 	t.caches[layer].Set(index, &value)
-
+	// invalidate from `index+1` (included), if needed
+	// note that `index` is zero-indexed and `t.cPos` is not
+	if index < t.cPos[layer] {
+		t.cPos[layer] = index
+	}
 	if layer == 0 && t.w <= index {
 		t.w = index + 1
 	}

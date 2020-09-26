@@ -29,15 +29,29 @@ message Key {
 	bytes key = 1;
 }
 
+message Permission{
+	string database = 1;
+	uint32 permission = 2;
+}
+message User {
+	bytes user = 1;
+	repeated Permission permissions = 3;
+	string createdby = 4;
+	string createdat = 5;
+	bool active = 6;
+}
+message UserList {
+	repeated User users = 1;
+}
+
 message CreateUserRequest {
 	bytes user = 1;
 	bytes password = 2;
-}
-message CreateUserResponse {
-	bytes user = 1;
+	uint32 permission = 3;
+	string database = 4;
 }
 
-message DeleteUserRequest {
+message UserRequest {
 	bytes user = 1;
 }
 
@@ -52,7 +66,32 @@ message LoginRequest {
 	bytes password = 2;
 }
 message LoginResponse {
-	bytes token = 1;
+	string token = 1;
+	bytes warning = 2;
+}
+
+message AuthConfig {
+	uint32 kind = 1;
+}
+message MTLSConfig {
+	bool enabled = 1;
+}
+
+message Node {
+	bytes i = 1;
+	bytes h = 2;
+	bytes refk = 3;
+	bool ref = 4;
+	bool cache = 5;
+	bool root = 6;
+}
+
+message Layer {
+	repeated Node l = 1;
+}
+
+message Tree{
+	repeated Layer t = 1;
 }
 
 message KeyValue {
@@ -106,8 +145,18 @@ message StructuredItemList {
 }
 
 message Root {
+	RootIndex payload = 1;
+	Signature signature = 2;
+}
+
+message RootIndex {
 	uint64 index = 1;
 	bytes root = 2;
+}
+
+message Signature {
+	bytes signature = 1;
+	bytes publicKey = 2;
 }
 
 message ScanOptions {
@@ -183,6 +232,7 @@ message SafeReferenceOptions {
 
 message HealthResponse {
 	bool status = 1;
+	string version = 2;
 }
 
 message ReferenceOptions {
@@ -229,7 +279,43 @@ message SafeZAddOptions {
 	Index rootIndex = 2;
 }
 
+message SafeIndexOptions {
+	uint64 index = 1;
+	Index rootIndex = 2;
+}
+
+message Database {
+	string databasename = 1;
+}
+message UseDatabaseReply{
+	string token = 1;
+}
+
+enum PermissionAction {
+	GRANT = 0;
+	REVOKE = 1;
+}
+
+message ChangePermissionRequest {
+	PermissionAction action = 1;
+	string username = 2;
+	string database = 3;
+	uint32 permission = 4;
+}
+
+message SetActiveUserRequest {
+	bool active = 1;
+	string username = 2;
+}
+
+message DatabaseListResponse{
+	repeated Database databases = 1;
+}
 option (grpc.gateway.protoc_gen_swagger.options.openapiv2_swagger) = {
+	info: {
+		title: "immudb REST API";
+		description: "<b>IMPORTANT</b>: All <code>get</code> and <code>safeget</code> functions return <u>base64-encoded</u> keys and values, while all <code>set</code> and <code>safeset</code> functions expect <u>base64-encoded</u> inputs."
+	};
 	security_definitions: {
 		security: {
 			key: "bearer"
@@ -248,10 +334,33 @@ option (grpc.gateway.protoc_gen_swagger.options.openapiv2_swagger) = {
 	}
 };
 
+// immudb gRPC & REST service
+// IMPORTANT: All get and safeget functions return base64-encoded keys and values, while all set and safeset functions expect base64-encoded inputs.
 service ImmuService {
-	rpc CreateUser (CreateUserRequest) returns (CreateUserResponse){}
-	rpc ChangePassword (ChangePasswordRequest) returns (google.protobuf.Empty){}
-	rpc DeleteUser (DeleteUserRequest) returns (google.protobuf.Empty){}
+	rpc ListUsers (google.protobuf.Empty) returns (UserList){
+		option (google.api.http) = {
+			get: "/v1/immurestproxy/user/list"
+		};
+	};
+
+	rpc CreateUser (CreateUserRequest) returns (google.protobuf.Empty){
+		option (google.api.http) = {
+			post: "/v1/immurestproxy/user"
+			body: "*"
+		};
+	};
+
+	rpc ChangePassword (ChangePasswordRequest) returns (google.protobuf.Empty){
+		option (google.api.http) = {
+			post: "/v1/immurestproxy/user/password/change"
+			body: "*"
+		};
+	};
+
+	rpc UpdateAuthConfig (AuthConfig) returns (google.protobuf.Empty){}
+	rpc UpdateMTLSConfig (MTLSConfig) returns (google.protobuf.Empty){}
+
+	rpc PrintTree (google.protobuf.Empty) returns (Tree){}
 
 	rpc Login (LoginRequest) returns (LoginResponse){
 		option (google.api.http) = {
@@ -260,6 +369,13 @@ service ImmuService {
 		};
 		option (grpc.gateway.protoc_gen_swagger.options.openapiv2_operation) = {
 			security: {} // no security
+		};
+	};
+
+	rpc Logout (google.protobuf.Empty) returns (google.protobuf.Empty){
+		option (google.api.http) = {
+			post: "/v1/immurestproxy/logout"
+			body: "*"
 		};
 	};
 
@@ -356,6 +472,12 @@ service ImmuService {
 		};
 	};
 
+	rpc BySafeIndex(SafeIndexOptions) returns (SafeItem){
+		option (google.api.http) = {
+			get: "/v1/immurestproxy/item/safe/index/{index}"
+		};
+	};
+
 	rpc ByIndexSV(Index) returns (StructuredItem){};
 
 	rpc History(Key) returns (ItemList){
@@ -430,4 +552,33 @@ service ImmuService {
 	//			body: "*"
 	//		};
 	//	}
+	rpc CreateDatabase(Database) returns (google.protobuf.Empty) {
+		option (google.api.http) = {
+			post: "/v1/immurestproxy/createdatabase"
+			body: "*"
+		};
+	}
+	rpc UseDatabase(Database) returns (UseDatabaseReply) {
+		option (google.api.http) = {
+			get: "/v1/immurestproxy/usedatabase/{databasename}"
+		};
+	}
+	rpc ChangePermission(ChangePermissionRequest) returns (google.protobuf.Empty) {
+		option (google.api.http) = {
+			post: "/v1/immurestproxy/changepermission"
+			body: "*"
+		};
+	}
+	rpc SetActiveUser (SetActiveUserRequest) returns (google.protobuf.Empty){
+		option (google.api.http) = {
+			post: "/v1/immurestproxy/user/setactiveUser"
+			body: "*"
+		};
+	};
+	rpc DatabaseList (google.protobuf.Empty) returns (DatabaseListResponse){
+		option (google.api.http) = {
+			post: "/v1/immurestproxy/user/databaselist"
+			body: "*"
+		};
+	};
 }

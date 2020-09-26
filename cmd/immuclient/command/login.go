@@ -17,11 +17,8 @@ limitations under the License.
 package immuclient
 
 import (
-	"context"
 	"fmt"
 
-	c "github.com/codenotary/immudb/cmd/helper"
-	"github.com/codenotary/immudb/pkg/client"
 	"github.com/spf13/cobra"
 )
 
@@ -30,24 +27,14 @@ func (cl *commandline) login(cmd *cobra.Command) {
 		Use:               "login username (you will be prompted for password)",
 		Short:             "Login using the specified username and password",
 		Aliases:           []string{"l"},
-		PersistentPreRunE: cl.connect,
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
 		PersistentPostRun: cl.disconnect,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			user := []byte(args[0])
-			pass, err := cl.passwordReader.Read("Password:")
+			resp, err := cl.immucl.Login(args)
 			if err != nil {
-				c.QuitWithUserError(err)
+				cl.quit(err)
 			}
-			ctx := context.Background()
-			response, err := cl.ImmuClient.Login(ctx, user, pass)
-			if err != nil {
-				c.QuitWithUserError(err)
-			}
-			tokenFileName := cl.ImmuClient.GetOptions().TokenFileName
-			if err := client.WriteFileToUserHomeDir(response.Token, tokenFileName); err != nil {
-				c.QuitToStdErr(err)
-			}
-			fmt.Printf("logged in\n")
+			fmt.Fprintf(cmd.OutOrStdout(), resp+"\n")
 			return nil
 		},
 		Args: cobra.ExactArgs(1),
@@ -59,11 +46,14 @@ func (cl *commandline) logout(cmd *cobra.Command) {
 	ccmd := &cobra.Command{
 		Use:               "logout",
 		Aliases:           []string{"x"},
-		PersistentPreRunE: cl.connect,
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
 		PersistentPostRun: cl.disconnect,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client.DeleteFileFromUserHomeDir(cl.ImmuClient.GetOptions().TokenFileName)
-			fmt.Println("logged out")
+			resp, err := cl.immucl.Logout(args)
+			if err != nil {
+				cl.quit(err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), resp+"\n")
 			return nil
 		},
 		Args: cobra.NoArgs,

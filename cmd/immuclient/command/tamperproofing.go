@@ -17,13 +17,8 @@ limitations under the License.
 package immuclient
 
 import (
-	"context"
-	"encoding/hex"
 	"fmt"
-	"strconv"
 
-	c "github.com/codenotary/immudb/cmd/helper"
-	"github.com/codenotary/immudb/pkg/api/schema"
 	"github.com/spf13/cobra"
 )
 
@@ -32,37 +27,14 @@ func (cl *commandline) consistency(cmd *cobra.Command) {
 		Use:               "check-consistency index hash",
 		Short:             "Check consistency for the specified index and hash",
 		Aliases:           []string{"c"},
-		PersistentPreRunE: cl.connect,
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
 		PersistentPostRun: cl.disconnect,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			index, err := strconv.ParseUint(args[0], 10, 64)
+			resp, err := cl.immucl.Consistency(args)
 			if err != nil {
-				c.QuitToStdErr(err)
+				cl.quit(err)
 			}
-			ctx := context.Background()
-			proof, err := cl.ImmuClient.Consistency(ctx, index)
-			if err != nil {
-				c.QuitWithUserError(err)
-			}
-
-			var root []byte
-			src := []byte(args[1])
-			l := hex.DecodedLen(len(src))
-			if l != 32 {
-				c.QuitToStdErr(fmt.Errorf("invalid hash length"))
-			}
-			root = make([]byte, l)
-			_, err = hex.Decode(root, src)
-			if err != nil {
-				c.QuitToStdErr(err)
-			}
-
-			fmt.Printf("verified: %t \nfirstRoot: %x at index: %d \nsecondRoot: %x at index: %d \n",
-				proof.Verify(schema.Root{Index: index, Root: root}),
-				proof.FirstRoot,
-				proof.First,
-				proof.SecondRoot,
-				proof.Second)
+			fmt.Fprintf(cmd.OutOrStdout(), resp+"\n")
 			return nil
 		},
 		Args: cobra.MinimumNArgs(2),
@@ -75,46 +47,14 @@ func (cl *commandline) inclusion(cmd *cobra.Command) {
 		Use:               "inclusion index",
 		Short:             "Check if specified index is included in the current tree",
 		Aliases:           []string{"i"},
-		PersistentPreRunE: cl.connect,
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
 		PersistentPostRun: cl.disconnect,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			index, err := strconv.ParseUint(args[0], 10, 64)
+			resp, err := cl.immucl.Inclusion(args)
 			if err != nil {
-				c.QuitToStdErr(err)
+				cl.quit(err)
 			}
-			ctx := context.Background()
-			proof, err := cl.ImmuClient.Inclusion(ctx, index)
-			if err != nil {
-				c.QuitWithUserError(err)
-			}
-			var hash []byte
-			if len(args) > 1 {
-				src := []byte(args[1])
-				l := hex.DecodedLen(len(src))
-				if l != 32 {
-					c.QuitToStdErr(fmt.Errorf("invalid hash length"))
-				}
-				hash = make([]byte, l)
-				_, err = hex.Decode(hash, src)
-				if err != nil {
-					c.QuitToStdErr(err)
-				}
-			} else {
-				item, err := cl.ImmuClient.ByIndex(ctx, index)
-				if err != nil {
-					c.QuitWithUserError(err)
-				}
-				hash, err = item.Hash()
-				if err != nil {
-					c.QuitWithUserError(err)
-				}
-			}
-			fmt.Printf("verified: %t \nhash: %x at index: %d \nroot: %x at index: %d \n",
-				proof.Verify(index, hash),
-				proof.Leaf,
-				proof.Index,
-				proof.Root,
-				proof.At)
+			fmt.Fprintf(cmd.OutOrStdout(), resp+"\n")
 			return nil
 		},
 		Args: cobra.MinimumNArgs(1),

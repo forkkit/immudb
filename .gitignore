@@ -10,6 +10,7 @@
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
+coverage.txt
 
 # Editor
 .vscode
@@ -30,22 +31,17 @@
 /immudb
 /nimmu
 /bm
-/immugw
+/immutc
+
+/dist
 
 # Working files
 .root*
 immudb.pid
-/db
+/data
 
 # Vendor
 vendor
-
-# Config
-configs/immuadmin.toml
-configs/immuclient.toml
-configs/immudb.toml
-configs/immugw.toml
-configs/immutest.toml
 
 # immudb auth
 immudb_pwd

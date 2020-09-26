@@ -21,8 +21,10 @@ import (
 	"strings"
 )
 
+// LogLevel ...
 type LogLevel int8
 
+// Log levels
 const (
 	LogDebug LogLevel = iota
 	LogInfo
@@ -30,11 +32,13 @@ const (
 	LogError
 )
 
+// Logger ...
 type Logger interface {
 	Errorf(string, ...interface{})
 	Warningf(string, ...interface{})
 	Infof(string, ...interface{})
 	Debugf(string, ...interface{})
+	CloneWithLevel(level LogLevel) Logger
 }
 
 func logLevelFromEnvironment() LogLevel {

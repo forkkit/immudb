@@ -9,7 +9,7 @@ git:
   depth: false
 
 go:
-  - 1.14.x
+  - 1.13.x
 
 install: true
 
@@ -33,7 +33,7 @@ jobs:
         - VCN_USER=$gosec_user VCN_PASSWORD=$gosec_pass /tmp/vcn login
         - VCN_NOTARIZATION_PASSWORD=$gosec_pass /tmp/vcn n -p --attr TravisJobName=${TRAVIS_JOB_NAME} --attr TravisJobNo=${TRAVIS_JOB_NUMBER} --attr  --silent results-${TRAVIS_BUILD_NUMBER}.json
         - /tmp/vcn logout
-        - sleep $SLEEP_TIME
+        - sleep $[ ( $RANDOM % 10 ) + 1 ]s
         - VCN_USER=$trv_user VCN_PASSWORD=$trv_pass /tmp/vcn login
         - VCN_NOTARIZATION_PASSWORD=$trv_pass /tmp/vcn n -p --attr TravisJobName=${TRAVIS_JOB_NAME} --attr TravisJobNo=${TRAVIS_JOB_NUMBER} --silent results-${TRAVIS_BUILD_NUMBER}.json
         - /tmp/vcn logout
@@ -43,14 +43,12 @@ jobs:
       arch:
         - amd64
       script:
-        - GOOS=linux GOARCH=amd64 make immudb-static immugw-static immuadmin-static immuclient-static
+        - GOOS=linux GOARCH=amd64 make immudb-static immuadmin-static immuclient-static
         - VCN_USER=$trv_user VCN_PASSWORD=$trv_pass /tmp/vcn login
         - VCN_NOTARIZATION_PASSWORD=$trv_pass /tmp/vcn n -p --attr TravisJobName=${TRAVIS_JOB_NAME} --attr TravisJobNo=${TRAVIS_JOB_NUMBER} --silent immudb
-        - sleep $SLEEP_TIME
-        - VCN_NOTARIZATION_PASSWORD=$trv_pass /tmp/vcn n -p --attr TravisJobName=${TRAVIS_JOB_NAME} --attr TravisJobNo=${TRAVIS_JOB_NUMBER} --silent immugw
-        - sleep $SLEEP_TIME
+        - sleep $[ ( $RANDOM % 10 ) + 1 ]s
         - VCN_NOTARIZATION_PASSWORD=$trv_pass /tmp/vcn n -p --attr TravisJobName=${TRAVIS_JOB_NAME} --attr TravisJobNo=${TRAVIS_JOB_NUMBER} --silent immuadmin
-        - sleep $SLEEP_TIME
+        - sleep $[ ( $RANDOM % 10 ) + 1 ]s
         - VCN_NOTARIZATION_PASSWORD=$trv_pass /tmp/vcn n -p --attr TravisJobName=${TRAVIS_JOB_NAME} --attr TravisJobNo=${TRAVIS_JOB_NUMBER} --silent immuclient
         - /tmp/vcn logout
       workspaces:
@@ -60,7 +58,6 @@ jobs:
             - immudb
             - immuadmin
             - immuclient
-            - immugw
 
     - stage: Image
       env:
@@ -71,12 +68,12 @@ jobs:
         use:
           - bins
       script:
-        - /tmp/vcn authenticate immudb immugw immuadmin immuclient
+        - /tmp/vcn authenticate immudb immuadmin immuclient
         - VCN_USER=$immudb_user VCN_PASSWORD=$immudb_pass /tmp/vcn login
         - docker build --tag "${DOCKER_IMAGE}:latest" -f Dockerfile .
         - VCN_NOTARIZATION_PASSWORD=$immudb_pass /tmp/vcn n -p --attr TravisJobName=${TRAVIS_JOB_NAME} --attr TravisJobNo=${TRAVIS_JOB_NUMBER} --silent docker://$DOCKER_IMAGE
         - /tmp/vcn logout
-        - sleep $SLEEP_TIME
+        - sleep $[ ( $RANDOM % 10 ) + 1 ]s
         - VCN_USER=$trv_user VCN_PASSWORD=$trv_pass /tmp/vcn login
         - VCN_NOTARIZATION_PASSWORD=$trv_pass /tmp/vcn n -p --attr TravisJobName=${TRAVIS_JOB_NAME} --attr TravisJobNo=${TRAVIS_JOB_NUMBER} --silent docker://$DOCKER_IMAGE
         - /tmp/vcn logout
@@ -85,6 +82,16 @@ jobs:
       deploy:
         provider: script
         script: docker push "${DOCKER_IMAGE}:latest"
+    - stage: Coveralls
+      script:
+        - go get golang.org/x/tools/cmd/cover
+        - go get github.com/mattn/goveralls
+        - go get -u github.com/ory/go-acc
+        - set -o pipefail
+        - go-acc ./... --ignore test || true
+        - cat coverage.txt | grep -v "schema.pb" > cover.out
+        - $HOME/gopath/bin/goveralls -coverprofile=cover.out -service=travis-ci -repotoken $COVERALLS_TOKEN
+    - stage: Scan (edited)
 branches:
   only:
     - master

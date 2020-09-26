@@ -26,6 +26,7 @@ import (
 	"github.com/gizak/termui/v3/widgets"
 )
 
+// Controller ...
 type Controller interface {
 	Render(*metrics)
 	Resize()
@@ -43,15 +44,42 @@ type statsController struct {
 	AvgDurationPlotData   []*list.List
 	MemoryPlot            *widgets.Plot
 	MemoryPlotData        []*list.List
+	tui                   Tui
+}
+
+type Tui interface {
+	TerminalDimensions() (int, int)
+	Render(items ...ui.Drawable)
+	Init() error
+	Close()
+	PollEvents() <-chan ui.Event
+}
+
+type tui struct{}
+
+func (t tui) TerminalDimensions() (int, int) {
+	return ui.TerminalDimensions()
+}
+func (t tui) Render(items ...ui.Drawable) {
+	ui.Render(items...)
+}
+func (t tui) Init() error {
+	return ui.Init()
+}
+func (t tui) Close() {
+	ui.Close()
+}
+func (t tui) PollEvents() <-chan ui.Event {
+	return ui.PollEvents()
 }
 
 func (p *statsController) Resize() {
 	p.resize()
-	ui.Render(p.Grid)
+	p.tui.Render(p.Grid)
 }
 
 func (p *statsController) resize() {
-	termWidth, termHeight := ui.TerminalDimensions()
+	termWidth, termHeight := p.tui.TerminalDimensions()
 	p.Grid.SetRect(0, 0, termWidth, termHeight)
 }
 
@@ -92,12 +120,12 @@ func updatePlot(
 func (p *statsController) Render(ms *metrics) {
 	uptime, _ := time.ParseDuration(fmt.Sprintf("%.4fh", ms.db.uptimeHours))
 	p.SummaryTable.Rows = [][]string{
-		[]string{"[ImmuDB stats](mod:bold)", fmt.Sprintf("[ at %s](mod:bold)", time.Now().Format("15:04:05"))},
-		[]string{"Database", ms.db.name},
-		[]string{"Uptime", uptime.String()},
-		[]string{"Entries", fmt.Sprintf("%d", ms.db.nbEntries)},
-		[]string{"No. clients", fmt.Sprintf("%d", ms.nbClients)},
-		[]string{"  active < 1h ago", fmt.Sprintf("%d", len(*ms.clientsActiveDuringLastHour()))},
+		{"[ImmuDB stats](mod:bold)", fmt.Sprintf("[ at %s](mod:bold)", time.Now().Format("15:04:05"))},
+		{"Database", ms.db.name},
+		{"Uptime", uptime.String()},
+		{"Entries", fmt.Sprintf("%d", ms.db.nbEntries)},
+		{"No. clients", fmt.Sprintf("%d", ms.nbClients)},
+		{"  active < 1h ago", fmt.Sprintf("%d", len(*ms.clientsActiveDuringLastHour()))},
 	}
 
 	totalSizeS, _ := byteCountBinary(ms.db.totalBytes)
@@ -259,7 +287,7 @@ func (p *statsController) initUI() {
 	)
 }
 
-func newStatsController(withDBHistograms bool) Controller {
+func newStatsController(withDBHistograms bool, tui Tui) Controller {
 	// xterm color reference https://jonasjacek.github.io/colors/
 	ui.Theme.Block.Title.Fg = ui.ColorGreen
 	ctl := &statsController{
@@ -268,6 +296,7 @@ func newStatsController(withDBHistograms bool) Controller {
 		SummaryTable:     widgets.NewTable(),
 		SizePlot:         widgets.NewPlot(),
 		MemoryPlot:       widgets.NewPlot(),
+		tui:              tui,
 	}
 	if withDBHistograms {
 		ctl.NbReadsWritesPlot = widgets.NewPlot()

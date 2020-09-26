@@ -1,7 +1,8 @@
 {
   "swagger": "2.0",
   "info": {
-    "title": "schema.proto",
+    "title": "immudb REST API",
+    "description": "\u003cb\u003eIMPORTANT\u003c/b\u003e: All \u003ccode\u003eget\u003c/code\u003e and \u003ccode\u003esafeget\u003c/code\u003e functions return \u003cu\u003ebase64-encoded\u003c/u\u003e keys and values, while all \u003ccode\u003eset\u003c/code\u003e and \u003ccode\u003esafeset\u003c/code\u003e functions expect \u003cu\u003ebase64-encoded\u003c/u\u003e inputs.",
     "version": "version not set"
   },
   "consumes": [
@@ -63,6 +64,32 @@
         ]
       }
     },
+    "/v1/immurestproxy/changepermission": {
+      "post": {
+        "operationId": "ChangePermission",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "properties": {}
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/schemaChangePermissionRequest"
+            }
+          }
+        ],
+        "tags": [
+          "ImmuService"
+        ]
+      }
+    },
     "/v1/immurestproxy/consistencyproof/{index}": {
       "get": {
         "operationId": "Consistency",
@@ -81,6 +108,33 @@
             "required": true,
             "type": "string",
             "format": "uint64"
+          }
+        ],
+        "tags": [
+          "ImmuService"
+        ]
+      }
+    },
+    "/v1/immurestproxy/createdatabase": {
+      "post": {
+        "summary": "todo(joe-dz): Enable restore when the feature is required again\n\trpc Restore(stream pb.KVList) returns (ItemsCount) {\n\t\toption (google.api.http) = {\n\t\t\tpost: \"/v1/immurestproxy/restore\"\n\t\t\tbody: \"*\"\n\t\t};\n\t}",
+        "operationId": "CreateDatabase",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "properties": {}
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/schemaDatabase"
+            }
           }
         ],
         "tags": [
@@ -344,6 +398,38 @@
         ]
       }
     },
+    "/v1/immurestproxy/item/safe/index/{index}": {
+      "get": {
+        "operationId": "BySafeIndex",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/schemaSafeItem"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "rootIndex.index",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "format": "uint64"
+          }
+        ],
+        "tags": [
+          "ImmuService"
+        ]
+      }
+    },
     "/v1/immurestproxy/item/scan": {
       "post": {
         "operationId": "Scan",
@@ -420,6 +506,32 @@
           "ImmuService"
         ],
         "security": []
+      }
+    },
+    "/v1/immurestproxy/logout": {
+      "post": {
+        "operationId": "Logout",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "properties": {}
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "properties": {}
+            }
+          }
+        ],
+        "tags": [
+          "ImmuService"
+        ]
       }
     },
     "/v1/immurestproxy/reference": {
@@ -509,6 +621,150 @@
             "required": true,
             "schema": {
               "$ref": "#/definitions/schemaSafeZAddOptions"
+            }
+          }
+        ],
+        "tags": [
+          "ImmuService"
+        ]
+      }
+    },
+    "/v1/immurestproxy/usedatabase/{databasename}": {
+      "get": {
+        "operationId": "UseDatabase",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/schemaUseDatabaseReply"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "databasename",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "ImmuService"
+        ]
+      }
+    },
+    "/v1/immurestproxy/user": {
+      "post": {
+        "operationId": "CreateUser",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "properties": {}
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/schemaCreateUserRequest"
+            }
+          }
+        ],
+        "tags": [
+          "ImmuService"
+        ]
+      }
+    },
+    "/v1/immurestproxy/user/databaselist": {
+      "post": {
+        "operationId": "DatabaseList",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/schemaDatabaseListResponse"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "properties": {}
+            }
+          }
+        ],
+        "tags": [
+          "ImmuService"
+        ]
+      }
+    },
+    "/v1/immurestproxy/user/list": {
+      "get": {
+        "operationId": "ListUsers",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/schemaUserList"
+            }
+          }
+        },
+        "tags": [
+          "ImmuService"
+        ]
+      }
+    },
+    "/v1/immurestproxy/user/password/change": {
+      "post": {
+        "operationId": "ChangePassword",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "properties": {}
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/schemaChangePasswordRequest"
+            }
+          }
+        ],
+        "tags": [
+          "ImmuService"
+        ]
+      }
+    },
+    "/v1/immurestproxy/user/setactiveUser": {
+      "post": {
+        "operationId": "SetActiveUser",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "properties": {}
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/schemaSetActiveUserRequest"
             }
           }
         ],
@@ -672,6 +928,41 @@
         }
       }
     },
+    "schemaChangePasswordRequest": {
+      "type": "object",
+      "properties": {
+        "user": {
+          "type": "string",
+          "format": "byte"
+        },
+        "oldPassword": {
+          "type": "string",
+          "format": "byte"
+        },
+        "newPassword": {
+          "type": "string",
+          "format": "byte"
+        }
+      }
+    },
+    "schemaChangePermissionRequest": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/schemaPermissionAction"
+        },
+        "username": {
+          "type": "string"
+        },
+        "database": {
+          "type": "string"
+        },
+        "permission": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
     "schemaConsistencyProof": {
       "type": "object",
       "properties": {
@@ -713,12 +1004,42 @@
         }
       }
     },
-    "schemaCreateUserResponse": {
+    "schemaCreateUserRequest": {
       "type": "object",
       "properties": {
         "user": {
           "type": "string",
           "format": "byte"
+        },
+        "password": {
+          "type": "string",
+          "format": "byte"
+        },
+        "permission": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "database": {
+          "type": "string"
+        }
+      }
+    },
+    "schemaDatabase": {
+      "type": "object",
+      "properties": {
+        "databasename": {
+          "type": "string"
+        }
+      }
+    },
+    "schemaDatabaseListResponse": {
+      "type": "object",
+      "properties": {
+        "databases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/schemaDatabase"
+          }
         }
       }
     },
@@ -728,6 +1049,9 @@
         "status": {
           "type": "boolean",
           "format": "boolean"
+        },
+        "version": {
+          "type": "string"
         }
       }
     },
@@ -851,6 +1175,17 @@
         }
       }
     },
+    "schemaLayer": {
+      "type": "object",
+      "properties": {
+        "l": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/schemaNode"
+          }
+        }
+      }
+    },
     "schemaLoginRequest": {
       "type": "object",
       "properties": {
@@ -868,8 +1203,40 @@
       "type": "object",
       "properties": {
         "token": {
+          "type": "string"
+        },
+        "warning": {
           "type": "string",
           "format": "byte"
+        }
+      }
+    },
+    "schemaNode": {
+      "type": "object",
+      "properties": {
+        "i": {
+          "type": "string",
+          "format": "byte"
+        },
+        "h": {
+          "type": "string",
+          "format": "byte"
+        },
+        "refk": {
+          "type": "string",
+          "format": "byte"
+        },
+        "ref": {
+          "type": "boolean",
+          "format": "boolean"
+        },
+        "cache": {
+          "type": "boolean",
+          "format": "boolean"
+        },
+        "root": {
+          "type": "boolean",
+          "format": "boolean"
         }
       }
     },
@@ -887,6 +1254,26 @@
           "format": "boolean"
         }
       }
+    },
+    "schemaPermission": {
+      "type": "object",
+      "properties": {
+        "database": {
+          "type": "string"
+        },
+        "permission": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "schemaPermissionAction": {
+      "type": "string",
+      "enum": [
+        "GRANT",
+        "REVOKE"
+      ],
+      "default": "GRANT"
     },
     "schemaProof": {
       "type": "object",
@@ -937,6 +1324,17 @@
       }
     },
     "schemaRoot": {
+      "type": "object",
+      "properties": {
+        "payload": {
+          "$ref": "#/definitions/schemaRootIndex"
+        },
+        "signature": {
+          "$ref": "#/definitions/schemaSignature"
+        }
+      }
+    },
+    "schemaRootIndex": {
       "type": "object",
       "properties": {
         "index": {
@@ -1060,6 +1458,31 @@
         }
       }
     },
+    "schemaSetActiveUserRequest": {
+      "type": "object",
+      "properties": {
+        "active": {
+          "type": "boolean",
+          "format": "boolean"
+        },
+        "username": {
+          "type": "string"
+        }
+      }
+    },
+    "schemaSignature": {
+      "type": "object",
+      "properties": {
+        "signature": {
+          "type": "string",
+          "format": "byte"
+        },
+        "publicKey": {
+          "type": "string",
+          "format": "byte"
+        }
+      }
+    },
     "schemaStructuredItem": {
       "type": "object",
       "properties": {
@@ -1096,6 +1519,61 @@
         },
         "value": {
           "$ref": "#/definitions/schemaContent"
+        }
+      }
+    },
+    "schemaTree": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/schemaLayer"
+          }
+        }
+      }
+    },
+    "schemaUseDatabaseReply": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string"
+        }
+      }
+    },
+    "schemaUser": {
+      "type": "object",
+      "properties": {
+        "user": {
+          "type": "string",
+          "format": "byte"
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/schemaPermission"
+          }
+        },
+        "createdby": {
+          "type": "string"
+        },
+        "createdat": {
+          "type": "string"
+        },
+        "active": {
+          "type": "boolean",
+          "format": "boolean"
+        }
+      }
+    },
+    "schemaUserList": {
+      "type": "object",
+      "properties": {
+        "users": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/schemaUser"
+          }
         }
       }
     },

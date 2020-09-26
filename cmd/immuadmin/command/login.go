@@ -17,57 +17,54 @@ limitations under the License.
 package immuadmin
 
 import (
+	"context"
 	"fmt"
 
 	c "github.com/codenotary/immudb/cmd/helper"
 	"github.com/codenotary/immudb/pkg/auth"
-	"github.com/codenotary/immudb/pkg/client"
 	"github.com/spf13/cobra"
 )
-
-func checkFirstAdminLogin(err error) {
-	if errMsg, matches := (&auth.ErrFirstAdminLogin{}).With("", "").Matches(err); matches {
-		c.QuitToStdErr(
-			fmt.Errorf(
-				"===============\n"+
-					"This looks like the very first admin login attempt, hence the following "+
-					"credentials have been generated:%s"+
-					"\nIMPORTANT: This is the only time they are shown, so make sure you remember them."+
-					"\n===============", errMsg),
-		)
-	}
-}
 
 func (cl *commandline) login(cmd *cobra.Command) {
 	ccmd := &cobra.Command{
 		Use:               "login username (you will be prompted for password)",
-		Short:             fmt.Sprintf("Login using the specified username and password (admin username is %s)", auth.AdminUsername),
+		Short:             fmt.Sprintf("Login using the specified username and password (admin username is %s)", auth.SysAdminUsername),
 		Aliases:           []string{"l"},
-		PersistentPreRunE: cl.connect,
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
 		PersistentPostRun: cl.disconnect,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			tokenFileName := cl.immuClient.GetOptions().TokenFileName
 			ctx := cl.context
-			user := args[0]
-			if user != auth.AdminUsername {
-				c.QuitToStdErr(fmt.Errorf("Permission denied: user %s has no admin rights", user))
+			userStr := args[0]
+			if userStr != auth.SysAdminUsername {
+				err := fmt.Errorf("Permission denied: user %s has no admin rights", userStr)
+				cl.quit(err)
+				return err
 			}
-			if _, err := cl.immuClient.Login(ctx, []byte(user), []byte{}); err != nil {
-				checkFirstAdminLogin(err)
-			}
+			user := []byte(userStr)
 			pass, err := cl.passwordReader.Read("Password:")
 			if err != nil {
-				c.QuitToStdErr(err)
+				cl.quit(err)
+				return err
 			}
-			response, err := cl.immuClient.Login(ctx, []byte(user), pass)
+			responseWarning, err := cl.loginAndRenewClient(ctx, user, pass)
 			if err != nil {
-				checkFirstAdminLogin(err)
-				c.QuitWithUserError(err)
+				cl.quit(err)
+				return err
 			}
-			if err := client.WriteFileToUserHomeDir(response.Token, tokenFileName); err != nil {
-				c.QuitToStdErr(err)
+			fmt.Fprintf(cmd.OutOrStdout(), "logged in\n")
+			if string(responseWarning) == auth.WarnDefaultAdminPassword {
+				c.PrintfColorW(cmd.OutOrStdout(), c.Yellow, "SECURITY WARNING: %s\n", responseWarning)
+				changedPassMsg, newPass, err := cl.changeUserPassword(userStr, pass)
+				if err != nil {
+					cl.quit(err)
+					return err
+				}
+				if _, err := cl.loginAndRenewClient(ctx, user, newPass); err != nil {
+					cl.quit(err)
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), changedPassMsg)
 			}
-			fmt.Println("logged in")
 			return nil
 		},
 		Args: cobra.ExactArgs(1),
@@ -75,15 +72,36 @@ func (cl *commandline) login(cmd *cobra.Command) {
 	cmd.AddCommand(ccmd)
 }
 
+func (cl *commandline) loginAndRenewClient(
+	ctx context.Context,
+	user []byte,
+	pass []byte,
+) (string, error) {
+	response, err := cl.immuClient.Login(ctx, user, pass)
+	if err != nil {
+		return "", err
+	}
+	if err = cl.ts.SetToken("", response.Token); err != nil {
+		return "", err
+	}
+	if cl.immuClient, err = cl.newImmuClient(cl.immuClient.GetOptions()); err != nil {
+		return "", err
+	}
+	return string(response.GetWarning()), nil
+}
+
 func (cl *commandline) logout(cmd *cobra.Command) {
 	ccmd := &cobra.Command{
 		Use:               "logout",
 		Aliases:           []string{"x"},
-		PersistentPreRunE: cl.connect,
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
 		PersistentPostRun: cl.disconnect,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client.DeleteFileFromUserHomeDir(cl.immuClient.GetOptions().TokenFileName)
-			fmt.Println("logged out")
+			if err := cl.immuClient.Logout(cl.context); err != nil {
+				cl.quit(err)
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "logged out\n")
 			return nil
 		},
 		Args: cobra.NoArgs,

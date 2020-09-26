@@ -19,18 +19,27 @@ package immutest
 import (
 	c "github.com/codenotary/immudb/cmd/helper"
 	"github.com/codenotary/immudb/cmd/version"
+	"github.com/codenotary/immudb/pkg/client"
 	"github.com/spf13/cobra"
 )
 
-var o = c.Options{}
-
-func init() {
-	cobra.OnInitialize(func() { o.InitConfig("immutest") })
-}
-
-func NewCmd() *cobra.Command {
+// NewCmd creates a new immutest command
+func NewCmd(
+	newImmuClient func(*client.Options) (client.ImmuClient, error),
+	pwr c.PasswordReader,
+	tr c.TerminalReader,
+	ts client.TokenService,
+	onError func(err error)) *cobra.Command {
 	cmd := &cobra.Command{}
-	Init(cmd, &o)
+	Init(cmd,
+		&commandline{
+			newImmuClient: newImmuClient,
+			pwr:           pwr,
+			tr:            tr,
+			tkns:          ts,
+			onError:       onError,
+			config:        c.Config{Name: "immutest"},
+		})
 	cmd.AddCommand(version.VersionCmd())
 	return cmd
 }

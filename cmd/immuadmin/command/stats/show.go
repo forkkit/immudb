@@ -18,6 +18,7 @@ package stats
 
 import (
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"sort"
@@ -30,14 +31,15 @@ func metricsURL(serverAddress string) string {
 	return "http://" + serverAddress + ":9497/metrics"
 }
 
-func newHttpClient() *http.Client {
+func newHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: requestTimeout,
 	}
 }
 
-func ShowMetricsRaw(serverAddress string) error {
-	resp, err := newHttpClient().Get(metricsURL(serverAddress))
+// ShowMetricsRaw ...
+func ShowMetricsRaw(w io.Writer, serverAddress string) error {
+	resp, err := newHTTPClient().Get(metricsURL(serverAddress))
 	if err != nil {
 		return err
 	}
@@ -46,11 +48,12 @@ func ShowMetricsRaw(serverAddress string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(string(body))
+	fmt.Fprintf(w, string(body)+"\n")
 	return nil
 }
 
-func ShowMetricsAsText(serverAddress string) error {
+// ShowMetricsAsText ...
+func ShowMetricsAsText(w io.Writer, serverAddress string) error {
 	loader := newMetricsLoader(metricsURL(serverAddress))
 	ms, err := loader.Load()
 	if err != nil {
@@ -62,25 +65,25 @@ func ShowMetricsAsText(serverAddress string) error {
 	const intPattern = "%-*s:\t%d\n"
 
 	// print DB info
-	fmt.Printf(strPattern, labelLength, "Database path", ms.db.name)
+	fmt.Fprintf(w, strPattern, labelLength, "Database path", ms.db.name)
 	uptime, _ := time.ParseDuration(fmt.Sprintf("%.4fh", ms.db.uptimeHours))
-	fmt.Printf(strPattern, labelLength, "Uptime", uptime)
-	fmt.Printf(intPattern, labelLength, "Number of entries", ms.db.nbEntries)
+	fmt.Fprintf(w, strPattern, labelLength, "Uptime", uptime)
+	fmt.Fprintf(w, intPattern, labelLength, "Number of entries", ms.db.nbEntries)
 	lsmSizeS, _ := byteCountBinary(ms.db.lsmBytes)
 	vlogSizeS, _ := byteCountBinary(ms.db.vlogBytes)
 	totalSizeS, _ := byteCountBinary(ms.db.totalBytes)
-	fmt.Printf(strPattern, labelLength, "LSM size", lsmSizeS)
-	fmt.Printf(strPattern, labelLength, "VLog size", vlogSizeS)
-	fmt.Printf(strPattern, labelLength, "Total size", totalSizeS)
+	fmt.Fprintf(w, strPattern, labelLength, "LSM size", lsmSizeS)
+	fmt.Fprintf(w, strPattern, labelLength, "VLog size", vlogSizeS)
+	fmt.Fprintf(w, strPattern, labelLength, "Total size", totalSizeS)
 
 	// print clients
-	fmt.Printf(intPattern, labelLength, "Number of clients", ms.nbClients)
-	fmt.Printf(strPattern, labelLength, "Queries per client", "")
+	fmt.Fprintf(w, intPattern, labelLength, "Number of clients", ms.nbClients)
+	fmt.Fprintf(w, strPattern, labelLength, "Queries per client", "")
 	for k, v := range ms.nbRPCsPerClient {
-		fmt.Printf("   "+intPattern, labelLength-3, k, v)
+		fmt.Fprintf(w, "   "+intPattern, labelLength-3, k, v)
 		if lastMsgAt, ok := ms.lastMsgAtPerClient[k]; ok {
 			ago := time.Since(time.Unix(int64(lastMsgAt), 0))
-			fmt.Printf("      "+strPattern, labelLength-6, "Last query", fmt.Sprintf("%s ago", ago))
+			fmt.Fprintf(w, "      "+strPattern, labelLength-6, "Last query", fmt.Sprintf("%s ago", ago))
 		}
 	}
 
@@ -91,17 +94,19 @@ func ShowMetricsAsText(serverAddress string) error {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		fmt.Printf(strPattern, labelLength, "Avg. duration (nb calls)", "µs")
+		fmt.Fprintf(w, strPattern, labelLength, "Avg. duration (nb calls)", "µs")
 		for _, k := range keys {
 			rd := ms.durationRPCsByMethod[k]
 			lbl := fmt.Sprintf("%s (%d)", rd.method, rd.counter)
-			fmt.Printf("   "+strPattern, labelLength-3, lbl, fmt.Sprintf("%.0f", rd.avgDuration*1000_000))
+			fmt.Fprintf(w, "   "+strPattern, labelLength-3, lbl, fmt.Sprintf("%.0f", rd.avgDuration*1000_000))
 		}
 	}
 
 	return nil
 }
 
+// ShowMetricsVisually ...
 func ShowMetricsVisually(serverAddress string) error {
-	return runUI(newMetricsLoader(metricsURL(serverAddress)))
+	su := statsui{Loader: newMetricsLoader(metricsURL(serverAddress)), Tui: tui{}}
+	return su.runUI(false)
 }

@@ -21,49 +21,76 @@ import (
 	"strings"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
+// UpdateMetrics callback which will be called to update metrics
 var UpdateMetrics func(context.Context)
 
+// WrappedServerStream ...
 type WrappedServerStream struct {
 	grpc.ServerStream
 }
 
+// RecvMsg ...
 func (w *WrappedServerStream) RecvMsg(m interface{}) error {
 	return w.ServerStream.RecvMsg(m)
 }
 
+// SendMsg ...
 func (w *WrappedServerStream) SendMsg(m interface{}) error {
 	return w.ServerStream.SendMsg(m)
 }
 
+// ServerStreamInterceptor gRPC server interceptor for streams
 func ServerStreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 	ctx := ss.Context()
 	if UpdateMetrics != nil {
 		UpdateMetrics(ctx)
 	}
-	if err := checkAuth(ctx, info.FullMethod, srv); err != nil {
-		return err
+	if IsTampered {
+		return status.Errorf(
+			codes.DataLoss, "the database should be checked manually as we detected possible tampering")
+	}
+	if !AuthEnabled {
+		if !DevMode {
+			if !isLocalClient(ctx) {
+				return status.Errorf(
+					codes.PermissionDenied,
+					"server has authentication disabled: only local connections are accepted")
+			}
+		}
 	}
 	return handler(srv, &WrappedServerStream{ss})
 }
 
+// ServerUnaryInterceptor gRPC server interceptor for unary methods
 func ServerUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	if UpdateMetrics != nil {
 		UpdateMetrics(ctx)
 	}
-	if err := checkAuth(ctx, info.FullMethod, req); err != nil {
-		return nil, err
+	if IsTampered {
+		return nil, status.Errorf(
+			codes.DataLoss, "the database should be checked manually as we detected possible tampering")
 	}
-	m, err := handler(ctx, req)
-	return m, err
+	if !AuthEnabled {
+		if !DevMode {
+			if !isLocalClient(ctx) {
+				return nil, status.Errorf(
+					codes.PermissionDenied,
+					"server has authentication disabled: only local connections are accepted")
+			}
+		}
+	}
+	return handler(ctx, req)
 }
 
-var localAddress = map[string]bool{
-	"127.0.0.1": true,
-	"localhost": true,
-	"bufconn":   true,
+var localAddress = map[string]struct{}{
+	"127.0.0.1": struct{}{},
+	"localhost": struct{}{},
+	"bufconn":   struct{}{},
 }
 
 func isLocalClient(ctx context.Context) bool {

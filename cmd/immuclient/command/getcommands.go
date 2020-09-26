@@ -17,12 +17,8 @@ limitations under the License.
 package immuclient
 
 import (
-	"bytes"
-	"context"
-	"io/ioutil"
-	"strconv"
+	"fmt"
 
-	c "github.com/codenotary/immudb/cmd/helper"
 	"github.com/spf13/cobra"
 )
 
@@ -31,19 +27,34 @@ func (cl *commandline) getByIndex(cmd *cobra.Command) {
 		Use:               "getByIndex",
 		Short:             "Return an element by index",
 		Aliases:           []string{"bi"},
-		PersistentPreRunE: cl.connect,
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
 		PersistentPostRun: cl.disconnect,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			index, err := strconv.ParseUint(args[0], 10, 64)
+			resp, err := cl.immucl.GetByIndex(args)
 			if err != nil {
-				c.QuitToStdErr(err)
+				cl.quit(err)
 			}
-			ctx := context.Background()
-			response, err := cl.ImmuClient.ByIndex(ctx, index)
+			fmt.Fprintf(cmd.OutOrStdout(), resp+"\n")
+			return nil
+		},
+		Args: cobra.ExactArgs(1),
+	}
+	cmd.AddCommand(ccmd)
+}
+
+func (cl *commandline) getRawBySafeIndex(cmd *cobra.Command) {
+	ccmd := &cobra.Command{
+		Use:               "getRawBySafeIndex",
+		Short:             "Return an element by index",
+		Aliases:           []string{"brsi"},
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
+		PersistentPostRun: cl.disconnect,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := cl.immucl.GetRawBySafeIndex(args)
 			if err != nil {
-				c.QuitWithUserError(err)
+				cl.quit(err)
 			}
-			printByIndex(response)
+			fmt.Fprintf(cmd.OutOrStdout(), resp+"\n")
 			return nil
 		},
 		Args: cobra.ExactArgs(1),
@@ -56,20 +67,14 @@ func (cl *commandline) getKey(cmd *cobra.Command) {
 		Use:               "get key",
 		Short:             "Get item having the specified key",
 		Aliases:           []string{"g"},
-		PersistentPreRunE: cl.connect,
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
 		PersistentPostRun: cl.disconnect,
 		RunE: func(cmd *cobra.Command, args []string) error {
-
-			key, err := ioutil.ReadAll(bytes.NewReader([]byte(args[0])))
+			resp, err := cl.immucl.GetKey(args)
 			if err != nil {
-				c.QuitToStdErr(err)
+				cl.quit(err)
 			}
-			ctx := context.Background()
-			response, err := cl.ImmuClient.Get(ctx, key)
-			if err != nil {
-				c.QuitWithUserError(err)
-			}
-			printItem([]byte(args[0]), nil, response)
+			fmt.Fprintf(cmd.OutOrStdout(), resp+"\n")
 			return nil
 		},
 		Args: cobra.ExactArgs(1),
@@ -82,19 +87,14 @@ func (cl *commandline) rawSafeGetKey(cmd *cobra.Command) {
 		Use:               "rawsafeget key",
 		Short:             "Get item having the specified key, without parsing structured values",
 		Aliases:           []string{"rg"},
-		PersistentPreRunE: cl.connect,
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
 		PersistentPostRun: cl.disconnect,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			key, err := ioutil.ReadAll(bytes.NewReader([]byte(args[0])))
+			resp, err := cl.immucl.RawSafeGetKey(args)
 			if err != nil {
-				c.QuitToStdErr(err)
+				cl.quit(err)
 			}
-			ctx := context.Background()
-			vi, err := cl.ImmuClient.RawSafeGet(ctx, key)
-			if err != nil {
-				c.QuitToStdErr(err)
-			}
-			printItem(vi.Key, vi.Value, vi)
+			fmt.Fprintf(cmd.OutOrStdout(), resp+"\n")
 			return nil
 		},
 		Args: cobra.ExactArgs(1),
@@ -107,20 +107,14 @@ func (cl *commandline) safeGetKey(cmd *cobra.Command) {
 		Use:               "safeget key",
 		Short:             "Get and verify item having the specified key",
 		Aliases:           []string{"sg"},
-		PersistentPreRunE: cl.connect,
+		PersistentPreRunE: cl.ConfigChain(cl.connect),
 		PersistentPostRun: cl.disconnect,
 		RunE: func(cmd *cobra.Command, args []string) error {
-
-			key, err := ioutil.ReadAll(bytes.NewReader([]byte(args[0])))
+			resp, err := cl.immucl.SafeGetKey(args)
 			if err != nil {
-				c.QuitToStdErr(err)
+				cl.quit(err)
 			}
-			ctx := context.Background()
-			response, err := cl.ImmuClient.SafeGet(ctx, key)
-			if err != nil {
-				c.QuitWithUserError(err)
-			}
-			printItem([]byte(args[0]), nil, response)
+			fmt.Fprintf(cmd.OutOrStdout(), resp+"\n")
 			return nil
 		},
 		Args: cobra.ExactArgs(1),
